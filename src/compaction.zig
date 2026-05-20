@@ -15,12 +15,20 @@ pub fn maybeCompact(
     msgs: *std.ArrayList(messages.Message),
     last_prompt_tokens: u64,
     stderr_writer: anytype,
+    force: bool,
 ) !bool {
-    if (last_prompt_tokens < THRESHOLD_TOKENS) return false;
+    if (!force and last_prompt_tokens < THRESHOLD_TOKENS) return false;
     // Need enough history to be worth compacting.
-    if (msgs.items.len < 6) return false;
+    if (msgs.items.len < 6) {
+        if (force) try stderr_writer.writeAll("[compact: nothing to compact yet]\n");
+        return false;
+    }
 
-    try stderr_writer.print("\n[compacting context — {d} prompt tokens]\n", .{last_prompt_tokens});
+    if (force) {
+        try stderr_writer.writeAll("\n[compacting context — manual]\n");
+    } else {
+        try stderr_writer.print("\n[compacting context — {d} prompt tokens]\n", .{last_prompt_tokens});
+    }
 
     // Keep msgs[0] (system) intact. Compact the first 2/3 of the rest.
     const history_start: usize = 1;

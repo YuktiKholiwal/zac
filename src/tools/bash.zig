@@ -1,6 +1,7 @@
 const std = @import("std");
 const messages = @import("../messages.zig");
 const mod = @import("mod.zig");
+const sandbox = @import("../sandbox.zig");
 
 pub const def = messages.Tool{
     .name = "bash",
@@ -21,7 +22,15 @@ pub fn execute(alloc: std.mem.Allocator, args: std.json.Value) anyerror![]u8 {
     const command = mod.getString(args, "command") orelse
         return try std.fmt.allocPrint(alloc, "Error: 'command' is required", .{});
 
-    var child = std.process.Child.init(&.{ "/bin/sh", "-c", command }, alloc);
+    const sb_argv = try sandbox.wrapArgv(alloc, command);
+    defer if (sb_argv) |a| sandbox.freeArgv(alloc, a);
+
+    const argv: []const []const u8 = if (sb_argv) |a|
+        a
+    else
+        &.{ "/bin/sh", "-c", command };
+
+    var child = std.process.Child.init(argv, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 

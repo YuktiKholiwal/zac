@@ -3,10 +3,10 @@
 A minimal CLI coding agent in Zig, talking to the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) directly over HTTPS+SSE. No SDK, no provider abstractions — one HTTP endpoint, one streaming protocol, one binary.
 
 ```
-2,909 LoC Zig across 23 files
+3,077 LoC Zig across 25 files
   557 lines of embedded prompt modes
    28 unit tests passing
-  5.9 MB debug binary (~1–2 MB with -Doptimize=ReleaseSmall)
+  6.0 MB debug binary (~1–2 MB with -Doptimize=ReleaseSmall)
     0 runtime dependencies
 ```
 
@@ -46,11 +46,13 @@ export AI_GATEWAY_BASE_URL="https://ai-gateway.vercel.sh/v1"  # optional
 
 ```bash
 zac                                     # interactive REPL
-zac -p "explain this codebase"          # one-shot, exit after one turn
+zac "explain this codebase"             # bare-arg one-shot
+zac -p "explain this codebase"          # explicit one-shot
 zac -c                                  # continue last session
 zac -m plan                             # start in plan mode
 zac --yolo                              # auto-allow every tool call
 zac --allow-outside                     # permit write/edit outside cwd
+zac --no-sandbox                        # disable macOS bash sandbox (on by default)
 ```
 
 In the REPL:
@@ -59,6 +61,8 @@ In the REPL:
 > /prompt debug          # switch mode mid-session
 > /model openai/gpt-4o   # swap model mid-session
 > /reasoning off         # hide the dim reasoning stream
+> /usage                 # cumulative token totals for this session
+> /compact               # manually compact conversation history
 > /reset                 # clear conversation history
 > /help                  # full command list
 > Ctrl-D                 # exit (or /exit, /quit)
@@ -144,6 +148,8 @@ src/cancel.zig       — SIGINT handler for in-flight cancellation
 src/path_guard.zig   — refuse writes outside cwd unless --allow-outside
 src/prompt.zig       — 11 embedded prompt modes
 src/prompts/*.md     — the actual mode files
+src/sandbox.zig      — macOS sandbox-exec wrapper for `bash`
+src/compaction.zig   — already listed above
 ```
 
 ## What's intentionally missing
