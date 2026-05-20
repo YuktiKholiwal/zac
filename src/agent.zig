@@ -33,7 +33,8 @@ pub fn run(
 
         var text = std.ArrayList(u8).init(alloc);
         defer text.deinit();
-        var md_state = ui.MdState{};
+        var line_renderer = ui.LineRenderer.init(alloc);
+        defer line_renderer.deinit();
 
         var pending = std.ArrayList(messages.OwnedToolCall).init(alloc);
         defer {
@@ -58,7 +59,7 @@ pub fn run(
                         reasoning_open = false;
                     }
                     try text.appendSlice(t);
-                    try ui.renderMarkdown(stdout_writer, &md_state, t);
+                    try line_renderer.feed(stdout_writer, t);
                 },
                 .reasoning_delta => |r| {
                     if (!cfg.show_reasoning) continue;
@@ -88,6 +89,7 @@ pub fn run(
         }
 
         if (reasoning_open) try stdout_writer.writeAll("\x1b[0m");
+        try line_renderer.flush(stdout_writer);
 
         if (turn_usage.total_tokens > 0 or turn_usage.prompt_tokens > 0) {
             last_usage = turn_usage;
@@ -128,11 +130,22 @@ pub fn run(
             // Pull a file path out of the args JSON if present.
             const path_opt = extractPath(alloc, call.arguments);
             defer if (path_opt) |p| alloc.free(p);
-            try ui.toolCall(stdout_writer, alloc, call.name, path_opt, summary(call.arguments));
+            try ui.toolCallStart(stdout_writer, alloc, call.name, path_opt, summary(call.arguments));
 
+            var tool_timer = std.time.Timer.start() catch null;
             const result = try tools.dispatch(alloc, perm, call.name, call.arguments);
+            const tool_ms: u64 = if (tool_timer) |*t| t.read() / std.time.ns_per_ms else 0;
             const is_edit = std.mem.eql(u8, call.name, "edit");
-            try ui.toolResult(stdout_writer, result, is_edit);
+            try ui.toolCallFinish(
+                stdout_writer,
+                alloc,
+                call.name,
+                path_opt,
+                summary(call.arguments),
+                result,
+                is_edit,
+                tool_ms,
+            );
 
             try msgs.append(.{
                 .role = .tool,
