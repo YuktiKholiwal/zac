@@ -11,6 +11,7 @@ const session = @import("session.zig");
 const context = @import("context.zig");
 const compaction = @import("compaction.zig");
 const sse_mod = @import("sse.zig");
+const sandbox = @import("sandbox.zig");
 
 test {
     _ = @import("sse.zig");
@@ -33,6 +34,7 @@ const Args = struct {
     yolo: bool = false,
     mode: prompt.Mode = .code,
     allow_outside: bool = false,
+    no_sandbox: bool = false,
     show_help: bool = false,
 };
 
@@ -79,12 +81,17 @@ pub fn main() !void {
     };
     cfg.allow_outside = args.allow_outside;
     tools.setAllowOutside(args.allow_outside);
+    sandbox.setEnabled(!args.no_sandbox);
     defer freeConfig(alloc, cfg);
 
     var client = std.http.Client{ .allocator = alloc };
     defer client.deinit();
 
     var current_mode = args.mode;
+
+    var total_prompt_tokens: u64 = 0;
+    var total_completion_tokens: u64 = 0;
+    var turn_count: u64 = 0;
 
     const project_context = context.load(alloc) catch null;
     defer if (project_context) |c| alloc.free(c);
@@ -152,7 +159,13 @@ pub fn main() !void {
             continue;
         }
 
-        if (try handleSlash(alloc, input, &msgs, &current_mode, &cfg, project_context, stdout, stderr)) |should_exit| {
+        const slash_ctx = SlashCtx{
+            .total_prompt_tokens = total_prompt_tokens,
+            .total_completion_tokens = total_completion_tokens,
+            .turn_count = turn_count,
+            .client = &client,
+        };
+        if (try handleSlash(alloc, input, &msgs, &current_mode, &cfg, project_context, slash_ctx, stdout, stderr)) |should_exit| {
             if (should_exit) return;
             continue;
         }
@@ -167,9 +180,12 @@ pub fn main() !void {
             break :blk std.mem.zeroes(sse_mod.Usage);
         };
         cancel.reset();
+        total_prompt_tokens += turn_usage.prompt_tokens;
+        total_completion_tokens += turn_usage.completion_tokens;
+        turn_count += 1;
         session.save(alloc, msgs.items) catch {};
 
-        _ = compaction.maybeCompact(alloc, &client, cfg, &msgs, turn_usage.prompt_tokens, stderr) catch |err| {
+        _ = compaction.maybeCompact(alloc, &client, cfg, &msgs, turn_usage.prompt_tokens, stderr, false) catch |err| {
             try stderr.print("[compaction error: {s}]\n", .{@errorName(err)});
         };
 
@@ -198,8 +214,14 @@ fn parseArgs(argv: [][:0]u8) !Args {
             i += 1;
             if (i >= argv.len) return error.MissingModeValue;
             out.mode = prompt.Mode.parse(argv[i]) orelse return error.UnknownMode;
-        } else {
+        } else if (std.mem.eql(u8, a, "--no-sandbox")) {
+            out.no_sandbox = true;
+        } else if (std.mem.startsWith(u8, a, "-")) {
             return error.UnknownArg;
+        } else {
+            // Bare positional argument → treat as one-shot prompt.
+            if (out.one_shot != null) return error.MultiplePrompts;
+            out.one_shot = a;
         }
     }
     return out;
@@ -207,7 +229,10 @@ fn parseArgs(argv: [][:0]u8) !Args {
 
 fn printHelp(w: anytype) !void {
     try w.writeAll(
-        \\Usage: zac [options]
+        \\Usage: zac [options] [prompt]
+        \\
+        \\If a bare prompt is given (e.g. zac "explain this codebase"), it runs
+        \\as a one-shot turn and exits, equivalent to -p "...".
         \\
         \\Options:
         \\  -p, --prompt "..."    Run one turn non-interactively and exit
@@ -215,12 +240,15 @@ fn printHelp(w: anytype) !void {
         \\  -m, --mode <name>     System prompt mode: code (default), plan, ask, review
         \\      --yolo            Auto-allow every tool call (skip permission prompts)
         \\      --allow-outside   Permit write/edit to paths outside the cwd
+        \\      --no-sandbox      Disable bash sandboxing (macOS, on by default)
         \\  -h, --help            Show this help
         \\
         \\In-REPL commands:
         \\  /prompt <name>        Switch system prompt mode mid-session
         \\  /model <name>         Switch model mid-session
         \\  /reasoning on|off     Toggle visible reasoning stream
+        \\  /usage                Show cumulative token totals for the session
+        \\  /compact              Manually compact conversation history
         \\  /reset                Clear history
         \\  /help                 Show in-REPL help
         \\  /exit, /quit          Exit (Ctrl-D also works)
@@ -245,6 +273,13 @@ fn freshMessages(
 }
 
 /// Returns null if not a slash command. Otherwise returns whether to exit.
+const SlashCtx = struct {
+    total_prompt_tokens: u64,
+    total_completion_tokens: u64,
+    turn_count: u64,
+    client: *std.http.Client,
+};
+
 fn handleSlash(
     alloc: std.mem.Allocator,
     input: []const u8,
@@ -252,6 +287,7 @@ fn handleSlash(
     current_mode: *prompt.Mode,
     cfg: *gateway.Config,
     project_context: ?[]const u8,
+    ctx: SlashCtx,
     stdout: anytype,
     stderr: anytype,
 ) !?bool {
@@ -304,6 +340,28 @@ fn handleSlash(
         } else {
             try stdout.print("/reasoning is {s}. use /reasoning on|off\n", .{if (cfg.show_reasoning) "on" else "off"});
         }
+        return false;
+    }
+
+    if (std.mem.eql(u8, input, "/usage")) {
+        try stdout.print(
+            "turns: {d}    cumulative tokens — in: {d}    out: {d}    total: {d}\n",
+            .{
+                ctx.turn_count,
+                ctx.total_prompt_tokens,
+                ctx.total_completion_tokens,
+                ctx.total_prompt_tokens + ctx.total_completion_tokens,
+            },
+        );
+        return false;
+    }
+
+    if (std.mem.eql(u8, input, "/compact")) {
+        const did = compaction.maybeCompact(alloc, ctx.client, cfg.*, msgs, 0, stderr, true) catch |err| blk: {
+            try stderr.print("[compaction error: {s}]\n", .{@errorName(err)});
+            break :blk false;
+        };
+        if (!did) try stdout.writeAll("[nothing to compact]\n");
         return false;
     }
 

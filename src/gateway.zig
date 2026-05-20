@@ -28,8 +28,9 @@ pub const Stream = struct {
     }
 };
 
-/// POSTs to {base_url}/chat/completions with stream=true.
-/// Caller owns the returned Stream and must call deinit().
+/// POSTs to {base_url}/chat/completions with stream=true. Retries once on a
+/// 5xx response after a brief backoff. Caller owns the returned Stream and
+/// must call deinit().
 pub fn chatStream(
     alloc: std.mem.Allocator,
     client: *std.http.Client,
@@ -40,6 +41,36 @@ pub fn chatStream(
     const body = try buildRequestBody(alloc, cfg, msgs, tools);
     defer alloc.free(body);
 
+    var attempt: u8 = 0;
+    while (true) : (attempt += 1) {
+        const result = try chatOnce(alloc, client, cfg, body);
+        switch (result) {
+            .ok => |s| return s,
+            .retryable => |status| {
+                if (attempt >= 1) {
+                    std.log.err("gateway returned {d} after retry; giving up.", .{status});
+                    return error.GatewayHttpError;
+                }
+                std.log.warn("gateway returned {d}; retrying in 1s...", .{status});
+                std.time.sleep(1 * std.time.ns_per_s);
+            },
+            .fatal => return error.GatewayHttpError,
+        }
+    }
+}
+
+const Attempt = union(enum) {
+    ok: Stream,
+    retryable: u16,
+    fatal: void,
+};
+
+fn chatOnce(
+    alloc: std.mem.Allocator,
+    client: *std.http.Client,
+    cfg: Config,
+    body: []const u8,
+) !Attempt {
     const url_str = try std.fmt.allocPrint(alloc, "{s}/chat/completions", .{cfg.base_url});
     defer alloc.free(url_str);
     const uri = try std.Uri.parse(url_str);
@@ -64,18 +95,18 @@ pub fn chatStream(
     try req.finish();
     try req.wait();
 
-    if (req.response.status != .ok) {
-        // Drain body for error context, then bail.
-        var err_buf: [4096]u8 = undefined;
-        const n = req.reader().read(&err_buf) catch 0;
-        std.log.err("gateway returned {d}: {s}", .{
-            @intFromEnum(req.response.status),
-            err_buf[0..n],
-        });
-        return error.GatewayHttpError;
+    const status = @intFromEnum(req.response.status);
+    if (req.response.status == .ok) {
+        return .{ .ok = .{ .client = client, .req = req } };
     }
 
-    return .{ .client = client, .req = req };
+    var err_buf: [4096]u8 = undefined;
+    const n = req.reader().read(&err_buf) catch 0;
+    std.log.err("gateway returned {d}: {s}", .{ status, err_buf[0..n] });
+    req.deinit();
+
+    if (status >= 500 and status < 600) return .{ .retryable = status };
+    return .{ .fatal = {} };
 }
 
 pub fn buildRequestBody(
