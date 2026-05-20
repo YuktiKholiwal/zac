@@ -117,3 +117,57 @@ pub const OwnedToolCall = struct {
         };
     }
 };
+
+fn writeToJson(alloc: std.mem.Allocator, value: anytype) ![]u8 {
+    var buf = std.ArrayList(u8).init(alloc);
+    errdefer buf.deinit();
+    var jws = std.json.writeStream(buf.writer(), .{});
+    try jws.write(value);
+    return buf.toOwnedSlice();
+}
+
+test "messages: assistant with text only" {
+    const alloc = std.testing.allocator;
+    const m = Message{ .role = .assistant, .content = "hi" };
+    const json = try writeToJson(alloc, m);
+    defer alloc.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"role\":\"assistant\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"content\":\"hi\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "tool_calls") == null);
+}
+
+test "messages: assistant with tool_calls" {
+    const alloc = std.testing.allocator;
+    const calls = [_]ToolCall{
+        .{ .id = "call_1", .name = "read", .arguments = "{\"path\":\"foo\"}" },
+    };
+    const m = Message{ .role = .assistant, .content = "", .tool_calls = &calls };
+    const json = try writeToJson(alloc, m);
+    defer alloc.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"tool_calls\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"call_1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"read\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"type\":\"function\"") != null);
+}
+
+test "messages: tool result has tool_call_id" {
+    const alloc = std.testing.allocator;
+    const m = Message{ .role = .tool, .content = "ok", .tool_call_id = "call_1" };
+    const json = try writeToJson(alloc, m);
+    defer alloc.free(json);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"role\":\"tool\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"tool_call_id\":\"call_1\"") != null);
+}
+
+test "messages: Tool serialises parameters as raw JSON" {
+    const alloc = std.testing.allocator;
+    const tool = Tool{
+        .name = "read",
+        .description = "reads",
+        .parameters_json = "{\"type\":\"object\"}",
+    };
+    const json = try writeToJson(alloc, tool);
+    defer alloc.free(json);
+    // parameters must appear as an object, not a quoted string.
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"parameters\":{\"type\":\"object\"}") != null);
+}

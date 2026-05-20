@@ -110,3 +110,44 @@ fn parseRole(s: []const u8) ?messages.Role {
     if (std.mem.eql(u8, s, "tool")) return .tool;
     return null;
 }
+
+test "session: parseRole" {
+    try std.testing.expectEqual(messages.Role.system, parseRole("system").?);
+    try std.testing.expectEqual(messages.Role.user, parseRole("user").?);
+    try std.testing.expectEqual(messages.Role.assistant, parseRole("assistant").?);
+    try std.testing.expectEqual(messages.Role.tool, parseRole("tool").?);
+    try std.testing.expect(parseRole("nope") == null);
+}
+
+test "session: JSON shape of a saved message round-trips" {
+    const alloc = std.testing.allocator;
+
+    // Build a small history.
+    const calls = [_]messages.ToolCall{
+        .{ .id = "call_1", .name = "read", .arguments = "{\"path\":\"x\"}" },
+    };
+    const msgs = [_]messages.Message{
+        .{ .role = .system, .content = "you are zac" },
+        .{ .role = .user, .content = "hi" },
+        .{ .role = .assistant, .content = "", .tool_calls = &calls },
+        .{ .role = .tool, .content = "ok", .tool_call_id = "call_1" },
+    };
+
+    // Serialize manually (matches what save() writes).
+    var buf = std.ArrayList(u8).init(alloc);
+    defer buf.deinit();
+    var jws = std.json.writeStream(buf.writer(), .{});
+    try jws.beginArray();
+    for (msgs) |m| try jws.write(m);
+    try jws.endArray();
+
+    // Verify the JSON has the markers we depend on for load().
+    const json = buf.items;
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"role\":\"system\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"role\":\"tool\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"tool_call_id\":\"call_1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"read\"") != null);
+    // The arguments field is itself a JSON string, so the inner JSON appears
+    // with escaped quotes: "arguments":"{\"path\":\"x\"}"
+    try std.testing.expect(std.mem.indexOf(u8, json, "\\\"path\\\":\\\"x\\\"") != null);
+}

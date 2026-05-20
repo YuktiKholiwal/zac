@@ -3,9 +3,9 @@
 A minimal CLI coding agent in Zig, talking to the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) directly over HTTPS+SSE. No SDK, no provider abstractions — one HTTP endpoint, one streaming protocol, one binary.
 
 ```
-2,659 LoC Zig across 23 files
+2,909 LoC Zig across 23 files
   557 lines of embedded prompt modes
-   11 unit tests passing
+   28 unit tests passing
   5.9 MB debug binary (~1–2 MB with -Doptimize=ReleaseSmall)
     0 runtime dependencies
 ```

@@ -240,6 +240,49 @@ test "sse: text deltas + finish + done" {
     try std.testing.expect(saw_done);
 }
 
+test "sse: tool_call deltas accumulate across chunks" {
+    const alloc = std.testing.allocator;
+    const raw =
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"pa\"}}]},\"finish_reason\":null}]}\n\n" ++
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"th\\\":\\\"x\\\"}\"}}]},\"finish_reason\":null}]}\n\n" ++
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" ++
+        "data: [DONE]\n\n";
+
+    var fbs = std.io.fixedBufferStream(raw);
+    var parser = Parser(@TypeOf(fbs.reader())).init(alloc, fbs.reader());
+    defer parser.deinit();
+
+    var args = std.ArrayList(u8).init(alloc);
+    defer args.deinit();
+    var saw_id = false;
+    var saw_name = false;
+    var saw_finish_tc = false;
+
+    while (try parser.next()) |ev| switch (ev) {
+        .tool_call_delta => |d| {
+            if (d.id) |id| {
+                try std.testing.expectEqualStrings("call_1", id);
+                saw_id = true;
+            }
+            if (d.name) |n| {
+                try std.testing.expectEqualStrings("read", n);
+                saw_name = true;
+            }
+            if (d.args_fragment) |a| try args.appendSlice(a);
+            try std.testing.expectEqual(@as(u32, 0), d.index);
+        },
+        .finish => |f| {
+            if (f == .tool_calls) saw_finish_tc = true;
+        },
+        else => {},
+    };
+
+    try std.testing.expect(saw_id);
+    try std.testing.expect(saw_name);
+    try std.testing.expect(saw_finish_tc);
+    try std.testing.expectEqualStrings("{\"path\":\"x\"}", args.items);
+}
+
 test "sse: usage chunk" {
     const alloc = std.testing.allocator;
     const raw =
