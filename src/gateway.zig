@@ -78,7 +78,7 @@ pub fn chatStream(
     return .{ .client = client, .req = req };
 }
 
-fn buildRequestBody(
+pub fn buildRequestBody(
     alloc: std.mem.Allocator,
     cfg: Config,
     msgs: []const messages.Message,
@@ -119,4 +119,53 @@ fn buildRequestBody(
     try jws.endObject();
 
     return buf.toOwnedSlice();
+}
+
+test "gateway: request body has required fields" {
+    const alloc = std.testing.allocator;
+    const key = try alloc.dupe(u8, "k");
+    defer alloc.free(key);
+    const url = try alloc.dupe(u8, "u");
+    defer alloc.free(url);
+    const model = try alloc.dupe(u8, "anthropic/claude-sonnet-4-5");
+    defer alloc.free(model);
+
+    const cfg = Config{
+        .api_key = key,
+        .base_url = url,
+        .model = model,
+    };
+    const msgs = [_]messages.Message{
+        .{ .role = .user, .content = "hi" },
+    };
+    const body = try buildRequestBody(alloc, cfg, &msgs, &.{});
+    defer alloc.free(body);
+
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"model\":\"anthropic/claude-sonnet-4-5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"stream\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"include_usage\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"max_tokens\":4096") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"messages\"") != null);
+    // No tools array when tools slice is empty.
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"tools\"") == null);
+}
+
+test "gateway: request body includes tools when given" {
+    const alloc = std.testing.allocator;
+    const key = try alloc.dupe(u8, "k");
+    defer alloc.free(key);
+    const url = try alloc.dupe(u8, "u");
+    defer alloc.free(url);
+    const model = try alloc.dupe(u8, "openai/gpt-4o");
+    defer alloc.free(model);
+    const cfg = Config{ .api_key = key, .base_url = url, .model = model };
+    const msgs = [_]messages.Message{.{ .role = .user, .content = "hi" }};
+    const tools = [_]messages.Tool{
+        .{ .name = "read", .description = "r", .parameters_json = "{}" },
+    };
+    const body = try buildRequestBody(alloc, cfg, &msgs, &tools);
+    defer alloc.free(body);
+
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"tools\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "\"name\":\"read\"") != null);
 }

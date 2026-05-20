@@ -29,3 +29,20 @@ pub fn isInsideCwd(alloc: std.mem.Allocator, path: []const u8) !bool {
     return std.mem.startsWith(u8, resolved, cwd) and
         (resolved.len == cwd.len or resolved[cwd.len] == '/');
 }
+
+test "path_guard: relative path inside cwd is allowed" {
+    const alloc = std.testing.allocator;
+    // build.zig is at the project root — exists in test runtime cwd.
+    try std.testing.expect(try isInsideCwd(alloc, "build.zig"));
+    try std.testing.expect(try isInsideCwd(alloc, "src/main.zig"));
+}
+
+test "path_guard: absolute path outside cwd is refused" {
+    const alloc = std.testing.allocator;
+    try std.testing.expect(!(try isInsideCwd(alloc, "/etc/hosts")));
+}
+
+test "path_guard: nonexistent file under cwd resolves via parent" {
+    const alloc = std.testing.allocator;
+    try std.testing.expect(try isInsideCwd(alloc, "src/does_not_exist.zig"));
+}

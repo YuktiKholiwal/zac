@@ -120,3 +120,44 @@ fn ask(tool: []const u8, preview: []const u8) !Decision {
         else => .deny,
     };
 }
+
+test "permission: yolo allows everything" {
+    var p = Permission.init(std.testing.allocator, true);
+    defer p.deinit();
+    try std.testing.expect(try p.check("bash", "rm -rf /"));
+    try std.testing.expect(try p.check("write", "/etc/passwd"));
+}
+
+test "permission: read-only tools auto-allow without yolo" {
+    var p = Permission.init(std.testing.allocator, false);
+    defer p.deinit();
+    try std.testing.expect(try p.check("read", "any path"));
+    try std.testing.expect(try p.check("grep", "foo"));
+    try std.testing.expect(try p.check("write_todo_list", ""));
+}
+
+test "permission: session allowlist persists across calls" {
+    var p = Permission.init(std.testing.allocator, false);
+    defer p.deinit();
+    const owned = try p.alloc.dupe(u8, "bash");
+    try p.session_allowlist.put(owned, {});
+    try std.testing.expect(try p.check("bash", "anything"));
+    try std.testing.expect(try p.check("bash", "rm -rf /"));
+}
+
+test "permission: pattern matches prefix" {
+    var p = Permission.init(std.testing.allocator, false);
+    defer p.deinit();
+    try p.addPattern("bash", "git ");
+    try std.testing.expect(try p.check("bash", "git status"));
+    try std.testing.expect(try p.check("bash", "git diff foo bar"));
+    // Doesn't apply to a different tool.
+    try std.testing.expect(!p.matchesPattern("write", "git anything"));
+}
+
+test "permission: derivePattern takes first word + space" {
+    try std.testing.expectEqualStrings("git ", derivePattern("git status"));
+    try std.testing.expectEqualStrings("cargo ", derivePattern("cargo test foo"));
+    // No space → entire preview.
+    try std.testing.expectEqualStrings("ls", derivePattern("ls"));
+}
