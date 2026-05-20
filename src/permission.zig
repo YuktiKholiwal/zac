@@ -1,4 +1,5 @@
 const std = @import("std");
+const ui = @import("ui.zig");
 
 pub const Decision = enum { allow_once, allow_session, allow_pattern, deny };
 
@@ -100,9 +101,10 @@ fn derivePattern(preview: []const u8) []const u8 {
 fn ask(tool: []const u8, preview: []const u8) !Decision {
     const stderr = std.io.getStdErr().writer();
     const stdin = std.io.getStdIn().reader();
+    const pattern = derivePattern(preview);
 
-    try stderr.print("\n  [permission] {s}: {s}\n", .{ tool, preview });
-    try stderr.print("  Allow? [y]es / [a]lways for this tool / [p]attern '{s}' / [N]o: ", .{derivePattern(preview)});
+    try ui.bell(stderr);
+    try ui.permissionBox(stderr, tool, preview, pattern);
 
     var buf: [16]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);

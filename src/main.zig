@@ -12,6 +12,7 @@ const context = @import("context.zig");
 const compaction = @import("compaction.zig");
 const sse_mod = @import("sse.zig");
 const sandbox = @import("sandbox.zig");
+const ui = @import("ui.zig");
 
 test {
     _ = @import("sse.zig");
@@ -35,6 +36,7 @@ const Args = struct {
     mode: prompt.Mode = .code,
     allow_outside: bool = false,
     no_sandbox: bool = false,
+    no_color: bool = false,
     show_help: bool = false,
 };
 
@@ -61,6 +63,7 @@ pub fn main() !void {
     }
 
     cancel.install();
+    ui.init(args.no_color);
 
     var perm = permission_mod.Permission.init(alloc, args.yolo);
     defer perm.deinit();
@@ -124,7 +127,8 @@ pub fn main() !void {
         return;
     }
 
-    try stdout.print("zac — model: {s} — mode: {s}\n", .{ cfg.model, current_mode.name() });
+    try ui.banner(stdout, cfg.model, current_mode.name());
+    try updateTitle(stdout, cfg.model, current_mode.name(), 0);
     try stdout.writeAll("Type your message. \\ at end of line = continue. /help for commands. Ctrl-D to quit.\n\n");
 
     var line_buf = std.ArrayList(u8).init(alloc);
@@ -175,10 +179,12 @@ pub fn main() !void {
             .content = try alloc.dupe(u8, input),
         });
 
+        var timer = std.time.Timer.start() catch null;
         const turn_usage = agent.run(alloc, &client, cfg, &perm, &msgs, tool_defs, stdout) catch |err| blk: {
             try stderr.print("\n[agent error: {s}]\n", .{@errorName(err)});
             break :blk std.mem.zeroes(sse_mod.Usage);
         };
+        const duration_ms: u64 = if (timer) |*t| t.read() / std.time.ns_per_ms else 0;
         cancel.reset();
         total_prompt_tokens += turn_usage.prompt_tokens;
         total_completion_tokens += turn_usage.completion_tokens;
@@ -189,8 +195,21 @@ pub fn main() !void {
             try stderr.print("[compaction error: {s}]\n", .{@errorName(err)});
         };
 
-        try stdout.writeAll("\n");
+        try ui.turnDivider(
+            stdout,
+            turn_count,
+            turn_usage.prompt_tokens,
+            turn_usage.completion_tokens,
+            duration_ms,
+        );
+        try updateTitle(stdout, cfg.model, current_mode.name(), total_prompt_tokens + total_completion_tokens);
     }
+}
+
+fn updateTitle(stdout: anytype, model: []const u8, mode: []const u8, total_tokens: u64) !void {
+    var buf: [128]u8 = undefined;
+    const title = std.fmt.bufPrint(&buf, "zac · {s} · {s} · {d} tok", .{ model, mode, total_tokens }) catch return;
+    try ui.setTitle(stdout, title);
 }
 
 fn parseArgs(argv: [][:0]u8) !Args {
@@ -216,6 +235,8 @@ fn parseArgs(argv: [][:0]u8) !Args {
             out.mode = prompt.Mode.parse(argv[i]) orelse return error.UnknownMode;
         } else if (std.mem.eql(u8, a, "--no-sandbox")) {
             out.no_sandbox = true;
+        } else if (std.mem.eql(u8, a, "--no-color")) {
+            out.no_color = true;
         } else if (std.mem.startsWith(u8, a, "-")) {
             return error.UnknownArg;
         } else {
@@ -241,6 +262,7 @@ fn printHelp(w: anytype) !void {
         \\      --yolo            Auto-allow every tool call (skip permission prompts)
         \\      --allow-outside   Permit write/edit to paths outside the cwd
         \\      --no-sandbox      Disable bash sandboxing (macOS, on by default)
+        \\      --no-color        Disable ANSI styling (also auto-off when not a TTY)
         \\  -h, --help            Show this help
         \\
         \\In-REPL commands:

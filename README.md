@@ -3,10 +3,10 @@
 A minimal CLI coding agent in Zig, talking to the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) directly over HTTPS+SSE. No SDK, no provider abstractions — one HTTP endpoint, one streaming protocol, one binary.
 
 ```
-3,077 LoC Zig across 25 files
+3,531 LoC Zig across 26 files
   557 lines of embedded prompt modes
    28 unit tests passing
-  6.0 MB debug binary (~1–2 MB with -Doptimize=ReleaseSmall)
+  6.1 MB debug binary (~1–2 MB with -Doptimize=ReleaseSmall)
     0 runtime dependencies
 ```
 
@@ -53,6 +53,7 @@ zac -m plan                             # start in plan mode
 zac --yolo                              # auto-allow every tool call
 zac --allow-outside                     # permit write/edit outside cwd
 zac --no-sandbox                        # disable macOS bash sandbox (on by default)
+zac --no-color                          # plain ASCII output (also auto-off when piped)
 ```
 
 In the REPL:
@@ -149,7 +150,7 @@ src/path_guard.zig   — refuse writes outside cwd unless --allow-outside
 src/prompt.zig       — 11 embedded prompt modes
 src/prompts/*.md     — the actual mode files
 src/sandbox.zig      — macOS sandbox-exec wrapper for `bash`
-src/compaction.zig   — already listed above
+src/ui.zig           — ANSI/markdown rendering, tool icons, hyperlinks, banner, dividers
 ```
 
 ## What's intentionally missing
