@@ -132,7 +132,19 @@ pub fn main() !void {
                 session.save(alloc, msgs.items) catch {};
                 return;
             },
-            else => return err,
+            else => {
+                // SIGINT during a blocking stdin read surfaces as an I/O error
+                // on macOS rather than a clean interruption — distinguish via
+                // the cancel flag. Any other error is fatal: continuing would
+                // re-enter the same broken read and spam errors forever.
+                if (cancel.take()) {
+                    try stderr.writeAll("\n[Ctrl-C — use /exit or Ctrl-D to quit]\n");
+                    continue;
+                }
+                try stderr.print("\n[input error: {s} — exiting]\n", .{@errorName(err)});
+                session.save(alloc, msgs.items) catch {};
+                return;
+            },
         } orelse continue;
 
         if (cancel.take()) {
