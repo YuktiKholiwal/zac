@@ -1,0 +1,15 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Zig build artifacts
+zig-out/
+.zig-cache/
+
+# Editor
+.DS_Store
+*.swp
+
+# Reference repos (cloned for study, not part of zac)
+zerostack/
