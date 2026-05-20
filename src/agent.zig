@@ -5,6 +5,7 @@ const sse = @import("sse.zig");
 const tools = @import("tools/mod.zig");
 const cancel = @import("cancel.zig");
 const permission_mod = @import("permission.zig");
+const ui = @import("ui.zig");
 
 pub const MAX_TURNS: usize = 25;
 
@@ -32,6 +33,7 @@ pub fn run(
 
         var text = std.ArrayList(u8).init(alloc);
         defer text.deinit();
+        var md_state = ui.MdState{};
 
         var pending = std.ArrayList(messages.OwnedToolCall).init(alloc);
         defer {
@@ -56,7 +58,7 @@ pub fn run(
                         reasoning_open = false;
                     }
                     try text.appendSlice(t);
-                    try stdout_writer.writeAll(t);
+                    try ui.renderMarkdown(stdout_writer, &md_state, t);
                 },
                 .reasoning_delta => |r| {
                     if (!cfg.show_reasoning) continue;
@@ -114,12 +116,6 @@ pub fn run(
 
         if (finish != .tool_calls or owned_calls.len == 0) {
             try stdout_writer.writeAll("\n");
-            if (turn_usage.total_tokens > 0 or turn_usage.prompt_tokens > 0) {
-                try stdout_writer.print("\x1b[2m[in:{d} out:{d}]\x1b[0m\n", .{
-                    turn_usage.prompt_tokens,
-                    turn_usage.completion_tokens,
-                });
-            }
             return last_usage;
         }
 
@@ -129,8 +125,15 @@ pub fn run(
                 try stdout_writer.writeAll("\n[cancelled]\n");
                 return last_usage;
             }
-            try stdout_writer.print("\n\x1b[2m  -> {s}({s})\x1b[0m\n", .{ call.name, summary(call.arguments) });
+            // Pull a file path out of the args JSON if present.
+            const path_opt = extractPath(alloc, call.arguments);
+            defer if (path_opt) |p| alloc.free(p);
+            try ui.toolCall(stdout_writer, alloc, call.name, path_opt, summary(call.arguments));
+
             const result = try tools.dispatch(alloc, perm, call.name, call.arguments);
+            const is_edit = std.mem.eql(u8, call.name, "edit");
+            try ui.toolResult(stdout_writer, result, is_edit);
+
             try msgs.append(.{
                 .role = .tool,
                 .tool_call_id = try alloc.dupe(u8, call.id),
@@ -146,4 +149,22 @@ pub fn run(
 fn summary(args: []const u8) []const u8 {
     if (args.len <= 80) return args;
     return args[0..80];
+}
+
+/// Best-effort extraction of a "path"/"command"/"pattern" field from JSON args.
+/// Returns an allocator-owned dupe so callers can free uniformly.
+fn extractPath(alloc: std.mem.Allocator, args_json: []const u8) ?[]u8 {
+    if (args_json.len == 0) return null;
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, args_json, .{}) catch return null;
+    defer parsed.deinit();
+    if (parsed.value != .object) return null;
+    for ([_][]const u8{ "path", "command", "pattern" }) |key| {
+        if (parsed.value.object.get(key)) |v| {
+            if (v == .string) {
+                const dup = alloc.dupe(u8, v.string) catch return null;
+                return dup;
+            }
+        }
+    }
+    return null;
 }
