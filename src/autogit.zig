@@ -6,6 +6,7 @@ pub fn isGitRepo(alloc: std.mem.Allocator) bool {
         &.{ "git", "rev-parse", "--is-inside-work-tree" },
         alloc,
     );
+    child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return false;
@@ -22,6 +23,7 @@ pub fn hasChanges(alloc: std.mem.Allocator) bool {
         &.{ "git", "status", "--porcelain" },
         alloc,
     );
+    child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return false;
@@ -44,6 +46,7 @@ pub fn commitAll(alloc: std.mem.Allocator, message: []const u8) !?[]u8 {
 
     {
         var add = std.process.Child.init(&.{ "git", "add", "-A" }, alloc);
+        add.stdin_behavior = .Ignore;
         add.stdout_behavior = .Ignore;
         add.stderr_behavior = .Ignore;
         try add.spawn();
@@ -55,6 +58,7 @@ pub fn commitAll(alloc: std.mem.Allocator, message: []const u8) !?[]u8 {
             &.{ "git", "commit", "--no-verify", "-m", message },
             alloc,
         );
+        commit.stdin_behavior = .Ignore;
         commit.stdout_behavior = .Ignore;
         commit.stderr_behavior = .Ignore;
         try commit.spawn();
@@ -73,6 +77,7 @@ fn shortSha(alloc: std.mem.Allocator) ![]u8 {
         &.{ "git", "rev-parse", "--short", "HEAD" },
         alloc,
     );
+    child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     try child.spawn();
@@ -95,6 +100,7 @@ pub fn undoLast(alloc: std.mem.Allocator) !bool {
         &.{ "git", "reset", "--soft", "HEAD~1" },
         alloc,
     );
+    child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
     try child.spawn();

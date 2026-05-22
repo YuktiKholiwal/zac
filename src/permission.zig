@@ -135,7 +135,7 @@ test "permission: read-only tools auto-allow without yolo" {
     defer p.deinit();
     try std.testing.expect(try p.check("read", "any path"));
     try std.testing.expect(try p.check("grep", "foo"));
-    try std.testing.expect(try p.check("write_todo_list", ""));
+    try std.testing.expect(try p.check("plan", ""));
 }
 
 test "permission: session allowlist persists across calls" {
