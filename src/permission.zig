@@ -1,7 +1,7 @@
 const std = @import("std");
 const ui = @import("ui.zig");
 
-pub const Decision = enum { allow_once, allow_session, allow_pattern, deny };
+pub const Decision = enum { once, trust, pattern, deny };
 
 pub const Permission = struct {
     /// Tools the user has chosen to allow blanket for the rest of the session.
@@ -49,13 +49,13 @@ pub const Permission = struct {
 
         const decision = try ask(tool_name, preview);
         switch (decision) {
-            .allow_once => return true,
-            .allow_session => {
+            .once => return true,
+            .trust => {
                 const owned = try self.alloc.dupe(u8, tool_name);
                 try self.session_allowlist.put(owned, {});
                 return true;
             },
-            .allow_pattern => {
+            .pattern => {
                 try self.addPattern(tool_name, derivePattern(preview));
                 return true;
             },
@@ -84,9 +84,9 @@ pub const Permission = struct {
 fn isReadOnly(tool: []const u8) bool {
     return std.mem.eql(u8, tool, "read") or
         std.mem.eql(u8, tool, "grep") or
-        std.mem.eql(u8, tool, "find_files") or
-        std.mem.eql(u8, tool, "list_dir") or
-        std.mem.eql(u8, tool, "write_todo_list");
+        std.mem.eql(u8, tool, "find") or
+        std.mem.eql(u8, tool, "ls") or
+        std.mem.eql(u8, tool, "plan");
 }
 
 /// Heuristic: for bash, take everything up to the first whitespace boundary
@@ -116,9 +116,9 @@ fn ask(tool: []const u8, preview: []const u8) !Decision {
     const trimmed = std.mem.trim(u8, raw, " \t\r\n");
     if (trimmed.len == 0) return .deny;
     return switch (std.ascii.toLower(trimmed[0])) {
-        'y' => .allow_once,
-        'a' => .allow_session,
-        'p' => .allow_pattern,
+        'y' => .once,
+        't' => .trust,
+        'p' => .pattern,
         else => .deny,
     };
 }

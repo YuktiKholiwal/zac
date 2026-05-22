@@ -22,6 +22,33 @@ pub fn isAllowOutside() bool {
     return allow_outside;
 }
 
+/// Shared freshness tracker — set by main.zig at startup. Tools that read
+/// files register them here so stale-context refresh can detect changes.
+const freshness = @import("../freshness.zig");
+var tracker: ?*freshness.FreshnessTracker = null;
+
+pub fn setTracker(t: *freshness.FreshnessTracker) void {
+    tracker = t;
+}
+
+pub fn observeRead(path: []const u8) void {
+    if (tracker) |t| {
+        t.observe(path) catch {};
+    }
+}
+
+/// Snapshot of file contents at the last read (for diff-aware re-reads).
+pub fn previousContentFor(path: []const u8) ?[]const u8 {
+    if (tracker) |t| return t.previousContent(path);
+    return null;
+}
+
+pub fn recordContentFor(path: []const u8, content: []const u8) void {
+    if (tracker) |t| {
+        t.recordContent(path, content) catch {};
+    }
+}
+
 pub const ToolError = error{
     Unknown,
     BadArguments,

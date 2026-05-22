@@ -13,6 +13,10 @@ const compaction = @import("compaction.zig");
 const sse_mod = @import("sse.zig");
 const sandbox = @import("sandbox.zig");
 const ui = @import("ui.zig");
+const freshness = @import("freshness.zig");
+const pricing = @import("pricing.zig");
+const snapshot = @import("snapshot.zig");
+const autogit = @import("autogit.zig");
 
 test {
     _ = @import("sse.zig");
@@ -37,6 +41,7 @@ const Args = struct {
     allow_outside: bool = false,
     no_sandbox: bool = false,
     no_color: bool = false,
+    no_auto_commit: bool = false,
     show_help: bool = false,
 };
 
@@ -86,6 +91,10 @@ pub fn main() !void {
     tools.setAllowOutside(args.allow_outside);
     sandbox.setEnabled(!args.no_sandbox);
     defer freeConfig(alloc, cfg);
+
+    var fresh = freshness.FreshnessTracker.init(alloc);
+    defer fresh.deinit();
+    tools.setTracker(&fresh);
 
     var client = std.http.Client{ .allocator = alloc };
     defer client.deinit();
@@ -137,6 +146,7 @@ pub fn main() !void {
     defer input_buf.deinit();
 
     while (true) {
+        try showCostHint(stdout, cfg.model, msgs.items);
         const input = readUserInput(stdin, stdout, &line_buf, &input_buf) catch |err| switch (err) {
             error.EndOfStream => {
                 try stdout.writeAll("\n");
@@ -168,11 +178,14 @@ pub fn main() !void {
             .total_completion_tokens = total_completion_tokens,
             .turn_count = turn_count,
             .client = &client,
+            .fresh = &fresh,
         };
         if (try handleSlash(alloc, input, &msgs, &current_mode, &cfg, project_context, slash_ctx, stdout, stderr)) |should_exit| {
             if (should_exit) return;
             continue;
         }
+
+        try injectFreshness(alloc, &fresh, &msgs, stderr);
 
         try msgs.append(.{
             .role = .user,
@@ -191,6 +204,18 @@ pub fn main() !void {
         turn_count += 1;
         session.save(alloc, msgs.items) catch {};
 
+        if (!args.no_auto_commit) {
+            const summary_text = if (input.len > 60) input[0..60] else input;
+            var msg_buf: [128]u8 = undefined;
+            const commit_msg = std.fmt.bufPrint(&msg_buf, "zac: {s}", .{summary_text}) catch "zac: turn";
+            if (autogit.commitAll(alloc, commit_msg)) |sha_opt| {
+                if (sha_opt) |sha| {
+                    try stderr.print("{s}[auto-commit {s}]{s}\n", .{ ui.DIM, sha, ui.RESET });
+                    alloc.free(sha);
+                }
+            } else |_| {}
+        }
+
         _ = compaction.maybeCompact(alloc, &client, cfg, &msgs, turn_usage.prompt_tokens, stderr, false) catch |err| {
             try stderr.print("[compaction error: {s}]\n", .{@errorName(err)});
         };
@@ -204,6 +229,44 @@ pub fn main() !void {
         );
         try updateTitle(stdout, cfg.model, current_mode.name(), total_prompt_tokens + total_completion_tokens);
     }
+}
+
+fn showCostHint(stdout: anytype, model: []const u8, msgs: []const messages.Message) !void {
+    var total: usize = 0;
+    for (msgs) |m| total += m.content.len;
+    const cost = pricing.projectInputCost(model, total);
+    if (cost < 0) return; // unknown model; quiet
+    if (cost < 0.001) return; // too small to matter
+    try stdout.print("{s}~${d:.3} est{s}\n", .{ ui.DIM, cost, ui.RESET });
+}
+
+/// If any tracked file changed on disk since the last turn, append a system
+/// message naming the changed paths so the model knows its context is stale.
+fn injectFreshness(
+    alloc: std.mem.Allocator,
+    fresh: *freshness.FreshnessTracker,
+    msgs: *std.ArrayList(messages.Message),
+    stderr: anytype,
+) !void {
+    const changed = try fresh.pollChanged(alloc);
+    defer {
+        for (changed) |p| alloc.free(p);
+        alloc.free(changed);
+    }
+    if (changed.len == 0) return;
+
+    var note = std.ArrayList(u8).init(alloc);
+    errdefer note.deinit();
+    try note.writer().writeAll(
+        "[zac freshness] These files have changed on disk since you last read them. Re-read with the `read` tool before using their contents in your next response:\n",
+    );
+    for (changed) |p| {
+        try note.writer().print("  - {s}\n", .{p});
+        try stderr.print("[freshness] {s} changed on disk\n", .{p});
+    }
+
+    const content = try note.toOwnedSlice();
+    try msgs.append(.{ .role = .system, .content = content });
 }
 
 fn updateTitle(stdout: anytype, model: []const u8, mode: []const u8, total_tokens: u64) !void {
@@ -237,6 +300,8 @@ fn parseArgs(argv: [][:0]u8) !Args {
             out.no_sandbox = true;
         } else if (std.mem.eql(u8, a, "--no-color")) {
             out.no_color = true;
+        } else if (std.mem.eql(u8, a, "--no-auto-commit")) {
+            out.no_auto_commit = true;
         } else if (std.mem.startsWith(u8, a, "-")) {
             return error.UnknownArg;
         } else {
@@ -263,14 +328,19 @@ fn printHelp(w: anytype) !void {
         \\      --allow-outside   Permit write/edit to paths outside the cwd
         \\      --no-sandbox      Disable bash sandboxing (macOS, on by default)
         \\      --no-color        Disable ANSI styling (also auto-off when not a TTY)
+        \\      --no-auto-commit  Don't auto-commit after turns that change files
         \\  -h, --help            Show this help
         \\
         \\In-REPL commands:
-        \\  /prompt <name>        Switch system prompt mode mid-session
+        \\  /mode <name>          Switch system prompt mode mid-session
         \\  /model <name>         Switch model mid-session
         \\  /reasoning on|off     Toggle visible reasoning stream
         \\  /usage                Show cumulative token totals for the session
-        \\  /compact              Manually compact conversation history
+        \\  /squash               Manually compact conversation history
+        \\  /snapshot <name>      Checkpoint conversation + touched files
+        \\  /restore <name>       Roll back to a snapshot
+        \\  /snapshots            List saved snapshots
+        \\  /undo                 Undo the last auto-commit (working tree preserved)
         \\  /reset                Clear history
         \\  /help                 Show in-REPL help
         \\  /exit, /quit          Exit (Ctrl-D also works)
@@ -300,6 +370,7 @@ const SlashCtx = struct {
     total_completion_tokens: u64,
     turn_count: u64,
     client: *std.http.Client,
+    fresh: *freshness.FreshnessTracker,
 };
 
 fn handleSlash(
@@ -332,8 +403,8 @@ fn handleSlash(
         return false;
     }
 
-    if (std.mem.startsWith(u8, input, "/prompt")) {
-        const rest = std.mem.trim(u8, input[7..], " \t");
+    if (std.mem.startsWith(u8, input, "/mode")) {
+        const rest = std.mem.trim(u8, input[5..], " \t");
         if (rest.len == 0) {
             try stdout.print("current mode: {s}. available: {s}\n", .{ current_mode.name(), prompt.ALL_MODES });
             return false;
@@ -378,12 +449,59 @@ fn handleSlash(
         return false;
     }
 
-    if (std.mem.eql(u8, input, "/compact")) {
+    if (std.mem.eql(u8, input, "/squash")) {
         const did = compaction.maybeCompact(alloc, ctx.client, cfg.*, msgs, 0, stderr, true) catch |err| blk: {
             try stderr.print("[compaction error: {s}]\n", .{@errorName(err)});
             break :blk false;
         };
         if (!did) try stdout.writeAll("[nothing to compact]\n");
+        return false;
+    }
+
+    if (std.mem.startsWith(u8, input, "/snapshot")) {
+        const rest = std.mem.trim(u8, input[9..], " \t");
+        if (rest.len == 0) {
+            try stderr.writeAll("usage: /snapshot <name>\n");
+            return false;
+        }
+        const paths = try ctx.fresh.allPaths(alloc);
+        defer alloc.free(paths);
+        snapshot.save(alloc, rest, msgs.items, paths) catch |err| {
+            try stderr.print("[snapshot error: {s}]\n", .{@errorName(err)});
+            return false;
+        };
+        try stdout.print("[snapshot '{s}' saved · {d} files]\n", .{ rest, paths.len });
+        return false;
+    }
+
+    if (std.mem.startsWith(u8, input, "/restore")) {
+        const rest = std.mem.trim(u8, input[8..], " \t");
+        if (rest.len == 0) {
+            try stderr.writeAll("usage: /restore <name>\n");
+            return false;
+        }
+        const restored = snapshot.restore(alloc, rest, msgs, freeMessages) catch |err| {
+            try stderr.print("[restore error: {s}]\n", .{@errorName(err)});
+            return false;
+        };
+        try stdout.print("[restored '{s}' · {d} files written]\n", .{ rest, restored });
+        return false;
+    }
+
+    if (std.mem.eql(u8, input, "/undo")) {
+        const ok = autogit.undoLast(alloc) catch false;
+        if (ok) {
+            try stdout.writeAll("[undid last auto-commit; working tree preserved]\n");
+        } else {
+            try stderr.writeAll("[/undo: not in a git repo, or nothing to undo]\n");
+        }
+        return false;
+    }
+
+    if (std.mem.eql(u8, input, "/snapshots")) {
+        snapshot.list(alloc, stdout) catch |err| {
+            try stderr.print("[snapshots error: {s}]\n", .{@errorName(err)});
+        };
         return false;
     }
 

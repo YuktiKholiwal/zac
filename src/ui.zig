@@ -70,9 +70,9 @@ pub fn toolIcon(name: []const u8) []const u8 {
     if (std.mem.eql(u8, name, "edit")) return "✎";
     if (std.mem.eql(u8, name, "bash")) return "→";
     if (std.mem.eql(u8, name, "grep")) return "⌕";
-    if (std.mem.eql(u8, name, "find_files")) return "⊞";
-    if (std.mem.eql(u8, name, "list_dir")) return "⊟";
-    if (std.mem.eql(u8, name, "write_todo_list")) return "☑";
+    if (std.mem.eql(u8, name, "find")) return "⊞";
+    if (std.mem.eql(u8, name, "ls")) return "⊟";
+    if (std.mem.eql(u8, name, "plan")) return "☑";
     return "•";
 }
 
@@ -479,7 +479,7 @@ pub fn permissionBox(
     const trimmed = if (preview.len > 60) preview[0..60] else preview;
     try writer.print("  {s}{s}│{s}  input: {s}{s}{s}\n", .{ BOLD, YELLOW, RESET, DIM, trimmed, RESET });
     try writer.print("  {s}{s}└──────────────────────────────────────────────{s}\n", .{ BOLD, YELLOW, RESET });
-    try writer.print("  {s}[y]{s}es  {s}[a]{s}lways  {s}[p]{s}attern '{s}'  {s}[N]{s}o: ", .{
+    try writer.print("  {s}[y]{s}es  {s}[t]{s}rust tool  {s}[p]{s}attern '{s}'  {s}[N]{s}o: ", .{
         BOLD, RESET, BOLD, RESET, BOLD, RESET, pattern, BOLD, RESET,
     });
 }

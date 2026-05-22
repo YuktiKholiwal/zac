@@ -8,14 +8,14 @@ const MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
 
 pub const def = messages.Tool{
     .name = "grep",
-    .description = "Search file contents for a substring (case-sensitive). Returns file:line:match for up to 200 hits. Skips common build/vendor dirs.",
+    .description = "Search through file contents for a literal substring. Matching is case-sensitive. Each hit is formatted as `path:line: matching line`. Honours .gitignore and built-in skip lists. Results capped at 200 — narrow the search with `include` (suffix filter) or a more specific `path`.",
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "pattern": {"type": "string", "description": "Substring to search for"},
-    \\    "path": {"type": "string", "description": "Root directory (default: cwd)"},
-    \\    "include": {"type": "string", "description": "Only files with this extension, e.g. '.zig'"}
+    \\    "pattern": {"type": "string", "description": "Substring you're looking for"},
+    \\    "path": {"type": "string", "description": "Where to start searching (defaults to current directory)"},
+    \\    "include": {"type": "string", "description": "Only consider files ending in this suffix, e.g. '.zig' or 'test.md'"}
     \\  },
     \\  "required": ["pattern"]
     \\}

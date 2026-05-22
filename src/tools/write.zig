@@ -5,13 +5,13 @@ const path_guard = @import("../path_guard.zig");
 
 pub const def = messages.Tool{
     .name = "write",
-    .description = "Write content to a file, overwriting if it exists. Creates parent directories as needed.",
+    .description = "Save the given content to a file. Replaces any existing content at the path; creates missing parent directories. Refuses paths outside the working directory unless --allow-outside was set.",
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "path": {"type": "string"},
-    \\    "content": {"type": "string"}
+    \\    "path": {"type": "string", "description": "Where to write the file"},
+    \\    "content": {"type": "string", "description": "Full file contents"}
     \\  },
     \\  "required": ["path", "content"]
     \\}

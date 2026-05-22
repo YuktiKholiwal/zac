@@ -1,22 +1,32 @@
 # zac
 
-A minimal CLI coding agent in Zig, talking to the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) directly over HTTPS+SSE. No SDK, no provider abstractions — one HTTP endpoint, one streaming protocol, one binary.
+A coding agent that lives in your terminal.
+
+zac talks to the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) directly — one HTTPS endpoint, one streaming protocol, no SDK in between. The full binary is a few megabytes of Zig and zero runtime dependencies. The whole thing runs inline (no alt-screen takeover), pipes cleanly, and gets out of your way.
+
+It is intentionally small. It is intentionally opinionated. It is **not** trying to be Cursor or opencode or Claude Code; it's trying to be the smallest agent you can actually live inside.
 
 ```
-3,531 LoC Zig across 26 files
-  557 lines of embedded prompt modes
-   28 unit tests passing
-  6.1 MB debug binary (~1–2 MB with -Doptimize=ReleaseSmall)
-    0 runtime dependencies
+~3,600 LoC of Zig                  · 28 unit tests passing
+8 tools · 11 prompt modes          · 6 MB debug / ~1–2 MB release
+.env loader · auto-context         · per-turn auto-compaction
+sandbox by default on macOS        · path guard refuses writes outside cwd
 ```
 
-Inspired by [zerostack](https://github.com/gi-dellav/zerostack) (Rust, 9.4k LoC), but ~28% the size by skipping the TUI and leaning on the Gateway for multi-provider routing.
+## What makes zac different
 
----
+| | |
+|---|---|
+| **Inline only** | No alt-screen. No raw mode. Output flows through your terminal scrollback like any other tool. Pipe it, redirect it, `tee` it. |
+| **Stale-context refresh** | zac tracks the mtime of every file it has read. Before each turn, files that changed on disk are re-read silently. Your edits stop the agent from working on a stale snapshot. |
+| **Diff-aware re-reads** | When the agent re-reads a file it already has in context, only the diff since last read is sent — saves a lot of tokens on large files. |
+| **Cost projection** | Each prompt shows an estimated cost *before* you hit enter, based on the current conversation size. No surprise $5 turns. |
+| **Snapshots** | `/snapshot` checkpoints both the conversation *and* the files it touched. `/restore` rolls back both. Conversational undo. |
+| **Per-turn git commits** | When zac touches files in a git repo, each turn becomes a real commit. Your history shows what the agent did, atomically. |
 
 ## Install
 
-Requires **Zig 0.14.x** (won't compile on 0.15+ yet) and a [Vercel AI Gateway](https://vercel.com/ai-gateway) account.
+You need **Zig 0.14.x** (0.15+ has stdlib breaks; not yet supported) and a Vercel AI Gateway key.
 
 ```bash
 git clone https://github.com/YuktiKholiwal/zac.git
@@ -27,141 +37,133 @@ zig build -Doptimize=ReleaseSmall
 
 ## Configure
 
-Copy the example env and fill in your key:
+Pick one:
 
 ```bash
+# Option A — .env file (gitignored by default)
 cp .env.example .env
-# Edit .env, paste your Gateway key
-```
+# then edit .env and paste your Gateway key
 
-Or use shell env vars (they override `.env`):
-
-```bash
+# Option B — shell env vars (override .env)
 export AI_GATEWAY_API_KEY="vck_..."
-export AI_GATEWAY_MODEL="anthropic/claude-sonnet-4-5"   # optional
-export AI_GATEWAY_BASE_URL="https://ai-gateway.vercel.sh/v1"  # optional
+export AI_GATEWAY_MODEL="anthropic/claude-sonnet-4-5"
 ```
 
-## Use it
+The default model is Sonnet 4.5. Any model the Gateway routes to (`openai/gpt-4o`, `google/gemini-2.0-flash`, etc.) works.
+
+## Use
 
 ```bash
-zac                                     # interactive REPL
-zac "explain this codebase"             # bare-arg one-shot
-zac -p "explain this codebase"          # explicit one-shot
-zac -c                                  # continue last session
-zac -m plan                             # start in plan mode
-zac --yolo                              # auto-allow every tool call
-zac --allow-outside                     # permit write/edit outside cwd
-zac --no-sandbox                        # disable macOS bash sandbox (on by default)
-zac --no-color                          # plain ASCII output (also auto-off when piped)
+zac                                  # interactive REPL
+zac "explain this codebase"          # bare-arg one-shot
+zac -p "fix the failing test"        # explicit one-shot
+zac -c                               # continue last session
+zac -m plan                          # start in plan mode
+zac --yolo                           # auto-allow every tool
+zac --allow-outside                  # permit writes outside cwd
+zac --no-sandbox                     # disable macOS bash sandbox
+zac --no-color                       # plain output (also auto when piped)
 ```
 
 In the REPL:
 
 ```
-> /prompt debug          # switch mode mid-session
-> /model openai/gpt-4o   # swap model mid-session
-> /reasoning off         # hide the dim reasoning stream
-> /usage                 # cumulative token totals for this session
-> /compact               # manually compact conversation history
-> /reset                 # clear conversation history
-> /help                  # full command list
-> Ctrl-D                 # exit (or /exit, /quit)
-> Ctrl-C                 # cancel current turn, stay in REPL
+> /mode debug              switch system prompt mode
+> /model openai/gpt-4o     swap model mid-session
+> /reasoning off           hide the dim reasoning stream
+> /usage                   running token totals
+> /squash                  manually compact history
+> /snapshot <name>         checkpoint conversation + files
+> /restore <name>          roll back to a snapshot
+> /reset                   clear conversation history
+> /help                    full command list
+Ctrl-D                    quit cleanly
+Ctrl-C                    cancel current turn (stays in REPL)
+\ at end of line           continue input on the next line
 ```
 
-Multi-line input: end a line with `\` to continue.
-
-## Tools the agent has
+## Tools
 
 | Tool | What it does |
 |---|---|
-| `read` | Read a file with 1-indexed line numbers (offset/limit) |
-| `write` | Create/overwrite a file (creates parent dirs) |
-| `edit` | Replace exact text with diff context; suggests nearby lines if not found |
-| `bash` | Run a shell command via `/bin/sh -c` |
-| `grep` | Substring search across files, `.gitignore`-aware |
-| `find_files` | Glob file discovery (`*`, `**`, `?`), `.gitignore`-aware |
-| `list_dir` | List directory entries |
-| `write_todo_list` | Maintain a visible task list for multi-step work |
+| `read` | Fetch a file with 1-indexed line numbers (`offset`/`limit` for paging). |
+| `write` | Save content to a file. Refuses paths outside cwd unless `--allow-outside`. |
+| `edit` | Substitute an exact span; falls back to whitespace-tolerant matching; suggests nearby lines on miss. |
+| `bash` | Run a shell command. Wrapped in `sandbox-exec` on macOS by default. |
+| `grep` | Substring search through files (`.gitignore`-aware). |
+| `find` | Glob file discovery — `*`, `**`, `?` (`.gitignore`-aware). |
+| `ls` | List a single directory's entries with type tag + size. |
+| `plan` | Record a visible multi-step checklist; replaces the prior plan each call. |
 
-`read`, `grep`, `find_files`, `list_dir`, `write_todo_list` auto-allow. `bash`, `write`, `edit` prompt for permission with options:
+Read-only tools (`read`, `grep`, `find`, `ls`, `plan`) auto-allow. The other three prompt with:
 
 ```
-[y]es / [a]lways for this tool / [p]attern 'git ' / [N]o
+[y]es  [t]rust tool  [p]attern 'git '  [N]o
 ```
 
-Pattern allowlist means `git status` once, all subsequent `git ...` calls auto-allow.
+`[p]` pre-approves a prefix (e.g. `git ` after seeing `git status`), so subsequent `git diff`/`git log`/etc. don't re-prompt.
 
 ## Prompt modes
 
-Switch with `-m <name>` at launch or `/prompt <name>` mid-session:
+`-m <name>` at launch or `/mode <name>` mid-session:
 
-| Mode | When to use |
-|---|---|
-| `code` (default) | General coding work, TDD-friendly |
-| `plan` | Explore and produce a plan without writing code |
-| `ask` | Q&A about code or systems, no tool spam |
-| `review` | Correctness, design, tests, blast radius |
-| `debug` | Track down a bug step-by-step |
-| `simplify` | Reduce, dedupe, collapse abstractions |
-| `brainstorm` | Generate options, weigh trade-offs |
-| `write-prompt` | Help you write a system prompt |
-| `frontend-design` | UI/UX-oriented coding |
-| `review-security` | Security-focused review |
-| `default` | Generic baseline |
+`default · code · plan · ask · review · debug · simplify · brainstorm · write-prompt · frontend-design · review-security`
+
+The mode swaps the system prompt; the conversation continues.
 
 ## Project context auto-loading
 
 On startup, zac reads the first of these it finds in cwd and appends to the system prompt:
 
 ```
-AGENTS.md → CLAUDE.md → .zac/AGENTS.md → .cursor/rules
+AGENTS.md  →  CLAUDE.md  →  .zac/AGENTS.md  →  .cursor/rules
 ```
 
-Drop project conventions or current-task notes in one of those and the agent picks them up automatically.
-
-## Build from source
-
-```bash
-zig build                       # debug build
-zig build -Doptimize=ReleaseSmall   # tiny release binary
-zig build test --summary all    # run unit tests
-zig build run -- --help         # build + run with args
-```
+Drop your project conventions in any of them; zac picks them up automatically each session.
 
 ## Architecture
 
 ```
-src/main.zig         — REPL, argv parsing, slash commands, session lifecycle
-src/agent.zig        — multi-turn streaming loop, tool-call accumulation
-src/gateway.zig      — HTTPS request builder for /chat/completions
-src/sse.zig          — Server-Sent Events parser → typed events
-src/messages.zig     — OpenAI chat-completions message/tool JSON shapes
-src/tools/*.zig      — eight tool implementations
-src/permission.zig   — yolo / ask / session / pattern allowlist
-src/session.zig      — save/load history to ~/.zac/last_session.json
-src/compaction.zig   — auto-summarise history at 100k prompt tokens
-src/context.zig      — AGENTS.md / CLAUDE.md auto-loader
-src/gitignore.zig    — minimal gitignore parser for grep/find_files
-src/env.zig          — .env file loader
-src/cancel.zig       — SIGINT handler for in-flight cancellation
-src/path_guard.zig   — refuse writes outside cwd unless --allow-outside
-src/prompt.zig       — 11 embedded prompt modes
-src/prompts/*.md     — the actual mode files
-src/sandbox.zig      — macOS sandbox-exec wrapper for `bash`
-src/ui.zig           — ANSI/markdown rendering, tool icons, hyperlinks, banner, dividers
+src/main.zig         REPL, argv parsing, slash commands, session lifecycle
+src/agent.zig        multi-turn streaming loop, tool-call accumulation
+src/gateway.zig      HTTPS request builder, 1× retry on 5xx
+src/sse.zig          Server-Sent Events parser → typed events
+src/messages.zig     OpenAI chat-completions JSON shapes
+src/ui.zig           inline ANSI renderer (markdown, tool icons, hyperlinks)
+src/tools/*.zig      eight tool implementations
+src/permission.zig   yolo / once / trust / pattern allowlists
+src/session.zig      save/load to ~/.zac/last_session.json
+src/compaction.zig   auto-summarise history at 100k prompt tokens
+src/context.zig      AGENTS.md / CLAUDE.md auto-loader
+src/gitignore.zig    small .gitignore matcher for grep + find
+src/env.zig          .env file loader
+src/cancel.zig       SIGINT handler for cancelling in-flight turns
+src/path_guard.zig   refuse writes outside cwd unless --allow-outside
+src/sandbox.zig      macOS sandbox-exec wrapper for `bash`
+src/prompt.zig       11 embedded prompt modes
+src/prompts/*.md     the actual mode files
 ```
 
-## What's intentionally missing
+## Build from source
 
-Compared to zerostack and similar tools, zac skips:
+```bash
+zig build                              # debug
+zig build -Doptimize=ReleaseSmall      # tiny release
+zig build test --summary all           # 28 unit tests
+zig build run -- --help                # build + run with args
+```
 
-- **Full TUI** (mouse, scrollback, markdown rendering) — half their LoC; the plain-stdin REPL is small and good enough.
-- **MCP / ACP** — external tool servers and editor protocols. Add later if you actually need them.
-- **Sandbox** — permission prompts already gate the dangerous tools.
-- **Multi-provider abstraction** — the Vercel AI Gateway is that abstraction.
+## What zac deliberately doesn't do
+
+- **No TUI.** No alt-screen, no mouse, no scrollback widget. The terminal already does those.
+- **No MCP / ACP.** Out of scope until the upstream protocols settle and there's a real need.
+- **No multi-provider abstraction.** The Gateway is the abstraction; rolling another inside zac would be redundant.
+- **No syntax highlighting.** Models output unstyled code; rendering it costs more than it's worth.
+
+## Credits
+
+Design loosely inspired by [zerostack](https://github.com/gi-dellav/zerostack) (GPL-3.0). zac is an independent reimplementation in Zig with a different architecture (no `rig`, no `crossterm`, no alt-screen) and different feature set (`.env`, snapshots, stale-context refresh, diff-aware re-reads, per-turn git commits).
 
 ## License
 
-Not yet chosen. Open an issue if you have a preference.
+Not yet decided. Until a `LICENSE` file lands, treat the source as "available for personal use, not yet relicensable."
