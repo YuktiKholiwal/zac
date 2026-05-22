@@ -6,8 +6,8 @@ const gitignore = @import("../gitignore.zig");
 const MAX_RESULTS: usize = 200;
 
 pub const def = messages.Tool{
-    .name = "find_files",
-    .description = "Find files whose path matches a simple glob. Supports * (any chars in segment) and **/ (any depth). Skips common build/vendor dirs. Returns up to 200 paths.",
+    .name = "find",
+    .description = "Locate files by glob. `*` matches anything within a path segment, `**` crosses segments, `?` matches a single character. Honours the project .gitignore and built-in defaults so build artifacts don't pollute results. Caps at 200 hits.",
     .parameters_json =
     \\{
     \\  "type": "object",

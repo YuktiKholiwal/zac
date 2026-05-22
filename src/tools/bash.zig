@@ -5,13 +5,13 @@ const sandbox = @import("../sandbox.zig");
 
 pub const def = messages.Tool{
     .name = "bash",
-    .description = "Execute a bash command in the current working directory. Returns combined stdout/stderr and exit code.",
+    .description = "Run a shell command through `/bin/sh -c`. The current working directory is the user's project. On macOS the command is wrapped in `sandbox-exec` that blocks writes to system paths (override globally with --no-sandbox). The returned text concatenates stdout, then stderr, then the exit code if non-zero.",
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "command": {"type": "string"},
-    \\    "timeout": {"type": "integer", "description": "Seconds before SIGKILL"}
+    \\    "command": {"type": "string", "description": "Shell command to execute"},
+    \\    "timeout": {"type": "integer", "description": "Wall-clock limit in seconds (after which the process is killed)"}
     \\  },
     \\  "required": ["command"]
     \\}

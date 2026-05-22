@@ -3,8 +3,8 @@ const messages = @import("../messages.zig");
 const mod = @import("mod.zig");
 
 pub const def = messages.Tool{
-    .name = "write_todo_list",
-    .description = "Write or update a todo list for the current task. Always provide the FULL list each call; this replaces the previous one. Use this to plan multi-step work and show progress to the user.",
+    .name = "plan",
+    .description = "Record a checklist of the multi-step work you intend to do. Each call REPLACES the prior plan; always send the complete list. Use this to break a complex request into visible steps and mark them as you go.",
     .parameters_json =
     \\{
     \\  "type": "object",
@@ -36,7 +36,7 @@ pub fn execute(alloc: std.mem.Allocator, args: std.json.Value) anyerror![]u8 {
     errdefer out.deinit();
     const w = out.writer();
 
-    try w.writeAll("Todo list updated:\n");
+    try w.writeAll("Plan recorded:\n");
     for (todos.array.items, 1..) |item, idx| {
         if (item != .object) continue;
         const content = mod.getString(item, "content") orelse continue;

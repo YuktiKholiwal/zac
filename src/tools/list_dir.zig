@@ -3,8 +3,8 @@ const messages = @import("../messages.zig");
 const mod = @import("mod.zig");
 
 pub const def = messages.Tool{
-    .name = "list_dir",
-    .description = "List entries of a directory (non-recursive). Shows type (f/d/l) and size in bytes for files.",
+    .name = "ls",
+    .description = "Show the entries of a directory, one per line, with a type tag (f=file, d=dir, l=symlink) and the byte size of files. Non-recursive.",
     .parameters_json =
     \\{
     \\  "type": "object",
