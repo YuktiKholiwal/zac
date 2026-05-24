@@ -24,8 +24,10 @@ pub fn hasChanges(alloc: std.mem.Allocator) bool {
         alloc,
     );
     child.stdin_behavior = .Ignore;
+    // collectOutput requires both pipes. Capture stderr too even if we don't
+    // look at it — leaving it as .Ignore makes the polling loop wait forever.
     child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
+    child.stderr_behavior = .Pipe;
     child.spawn() catch return false;
 
     var stdout_buf: std.ArrayListUnmanaged(u8) = .{};
@@ -79,7 +81,7 @@ fn shortSha(alloc: std.mem.Allocator) ![]u8 {
     );
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
+    child.stderr_behavior = .Pipe;
     try child.spawn();
 
     var stdout_buf: std.ArrayListUnmanaged(u8) = .{};
