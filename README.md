@@ -8,7 +8,7 @@
 [![Platform: macOS & Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue)](#install)
 [![Lines of code: ~3.8k](https://img.shields.io/badge/LoC-~3.8k-success)](#architecture)
 [![Tests: 28 passing](https://img.shields.io/badge/tests-28%2F28-brightgreen)](#test-plan)
-[![License: TBD](https://img.shields.io/badge/license-TBD-lightgrey)](#license)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](#license)
 
 </div>
 
@@ -573,4 +573,4 @@ Design loosely inspired by [zerostack](https://github.com/gi-dellav/zerostack) (
 
 <a id="license"></a>
 
-To be decided. Until a `LICENSE` file lands, treat the source as "available for personal use, not yet relicensable."
+[MIT](LICENSE) © 2026 Yukti Kholiwal.
