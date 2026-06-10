@@ -2,10 +2,9 @@ const std = @import("std");
 
 /// Files we look for in the current working directory, in priority order.
 /// First match wins; we don't concatenate multiple files because they often
-/// duplicate each other (AGENTS.md is usually a symlink to CLAUDE.md).
+/// duplicate each other.
 const CANDIDATES = [_][]const u8{
     "AGENTS.md",
-    "CLAUDE.md",
     ".zac/AGENTS.md",
     ".cursor/rules",
 };

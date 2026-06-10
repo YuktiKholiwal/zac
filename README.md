@@ -411,7 +411,7 @@ Pick at launch (`-m <name>`) or switch mid-session (`/mode <name>`). The mode sw
 On startup, zac looks for the first of these in cwd and appends it to the system prompt:
 
 ```
-AGENTS.md  →  CLAUDE.md  →  .zac/AGENTS.md  →  .cursor/rules
+AGENTS.md  →  .zac/AGENTS.md  →  .cursor/rules
 ```
 
 Drop your project conventions in any of them and zac picks them up automatically each session.
@@ -434,7 +434,7 @@ src/
 ├── permission.zig    yolo / once / trust / pattern allowlists
 ├── session.zig       save/load to ~/.zac/last_session.json
 ├── compaction.zig    auto-summarise history at 100k prompt tokens
-├── context.zig       AGENTS.md / CLAUDE.md auto-loader
+├── context.zig       AGENTS.md auto-loader
 ├── env.zig           .env file loader
 ├── gitignore.zig     small .gitignore matcher for grep + find
 ├── cancel.zig        SIGINT handler for cancelling in-flight turns
