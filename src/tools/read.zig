@@ -1,6 +1,7 @@
 const std = @import("std");
 const messages = @import("../messages.zig");
 const mod = @import("mod.zig");
+const path_guard = @import("../path_guard.zig");
 
 pub const def = messages.Tool{
     .name = "read",
@@ -24,6 +25,20 @@ pub fn execute(alloc: std.mem.Allocator, args: std.json.Value) anyerror![]u8 {
     const offset_given = mod.getInt(args, "offset") != null;
     const offset: usize = if (mod.getInt(args, "offset")) |o| @intCast(@max(1, o)) else 1;
     const limit: usize = if (mod.getInt(args, "limit")) |l| @intCast(@max(0, l)) else 2000;
+
+    // read auto-allows (no permission prompt), so guard it against escaping the
+    // cwd the same way write/edit do — otherwise the model could silently read
+    // ~/.ssh, .env secrets, or ../../ paths. --allow-outside opts out.
+    if (!mod.isAllowOutside()) {
+        const inside = path_guard.isInsideCwd(alloc, path) catch true;
+        if (!inside) {
+            return try std.fmt.allocPrint(
+                alloc,
+                "Error: refusing to read outside the cwd: {s}\nRe-run with --allow-outside if intentional.",
+                .{path},
+            );
+        }
+    }
 
     const file = std.fs.cwd().openFile(path, .{}) catch |err| {
         return try std.fmt.allocPrint(alloc, "Error opening {s}: {s}", .{ path, @errorName(err) });

@@ -89,13 +89,16 @@ fn isReadOnly(tool: []const u8) bool {
         std.mem.eql(u8, tool, "plan");
 }
 
-/// Heuristic: for bash, take everything up to the first whitespace boundary
-/// after the executable + flags up to the first non-flag word, so 'git status'
-/// becomes 'git ' and 'cargo test foo' becomes 'cargo test'. Keep it simple:
-/// just take the first whitespace-delimited token + a trailing space.
+/// Heuristic: derive a trust pattern of up to the first two whitespace-delimited
+/// tokens, so 'git status' stays 'git status' (not the far broader 'git ', which
+/// would also green-light 'git push --force'), and 'cargo test foo' becomes
+/// 'cargo test '. A single-token command like 'ls' is returned whole. The
+/// resulting prefix is what gets matched against future previews, and is shown
+/// to the user in the permission box before they choose to trust it.
 fn derivePattern(preview: []const u8) []const u8 {
-    const space = std.mem.indexOfScalar(u8, preview, ' ') orelse return preview;
-    return preview[0 .. space + 1];
+    const first = std.mem.indexOfScalar(u8, preview, ' ') orelse return preview;
+    const second = std.mem.indexOfScalarPos(u8, preview, first + 1, ' ') orelse return preview;
+    return preview[0 .. second + 1];
 }
 
 fn ask(tool: []const u8, preview: []const u8) !Decision {
@@ -157,9 +160,20 @@ test "permission: pattern matches prefix" {
     try std.testing.expect(!p.matchesPattern("write", "git anything"));
 }
 
-test "permission: derivePattern takes first word + space" {
-    try std.testing.expectEqualStrings("git ", derivePattern("git status"));
-    try std.testing.expectEqualStrings("cargo ", derivePattern("cargo test foo"));
+test "permission: derivePattern takes up to two tokens" {
+    // Two-token commands keep the subcommand so trust stays narrow.
+    try std.testing.expectEqualStrings("git status", derivePattern("git status"));
+    try std.testing.expectEqualStrings("cargo test ", derivePattern("cargo test foo"));
     // No space → entire preview.
     try std.testing.expectEqualStrings("ls", derivePattern("ls"));
+    // Trusting a push does cover its variants — the user saw the pattern.
+    try std.testing.expectEqualStrings("git push ", derivePattern("git push --force origin"));
+}
+
+test "permission: trusting 'git status' does not green-light 'git push'" {
+    var p = Permission.init(std.testing.allocator, false);
+    defer p.deinit();
+    try p.addPattern("bash", derivePattern("git status"));
+    try std.testing.expect(p.matchesPattern("bash", "git status --short"));
+    try std.testing.expect(!p.matchesPattern("bash", "git push --force"));
 }
