@@ -32,6 +32,7 @@ test {
     _ = @import("tools/write.zig");
     _ = @import("tools/edit.zig");
     _ = @import("tools/read.zig");
+    _ = @import("agent.zig");
 }
 
 const DEFAULT_BASE_URL = "https://ai-gateway.vercel.sh/v1";
@@ -103,6 +104,8 @@ pub fn main() !void {
     var client = std.http.Client{ .allocator = alloc };
     defer client.deinit();
 
+    var transport = agent.GatewayTransport{ .client = &client };
+
     var current_mode = args.mode;
 
     var total_prompt_tokens: u64 = 0;
@@ -130,7 +133,7 @@ pub fn main() !void {
     // One-shot mode: run a single user prompt and exit.
     if (args.one_shot) |p| {
         try msgs.append(.{ .role = .user, .content = try alloc.dupe(u8, p) });
-        _ = agent.run(alloc, &client, cfg, &perm, &msgs, tool_defs, stdout) catch |err| blk: {
+        _ = agent.run(alloc, cfg, &perm, &msgs, tool_defs, stdout, &transport) catch |err| blk: {
             try stderr.print("\n[agent error: {s}]\n", .{@errorName(err)});
             break :blk std.mem.zeroes(sse_mod.Usage);
         };
@@ -197,7 +200,7 @@ pub fn main() !void {
         });
 
         var timer = std.time.Timer.start() catch null;
-        const turn_usage = agent.run(alloc, &client, cfg, &perm, &msgs, tool_defs, stdout) catch |err| blk: {
+        const turn_usage = agent.run(alloc, cfg, &perm, &msgs, tool_defs, stdout, &transport) catch |err| blk: {
             try stderr.print("\n[agent error: {s}]\n", .{@errorName(err)});
             break :blk std.mem.zeroes(sse_mod.Usage);
         };
