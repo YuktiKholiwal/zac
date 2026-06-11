@@ -116,7 +116,11 @@ pub fn run(
             .tool_calls = owned_calls,
         });
 
-        if (finish != .tool_calls or owned_calls.len == 0) {
+        // Run the tools whenever the model emitted any. We intentionally do not
+        // gate on finish_reason == tool_calls: some providers/gateways emit tool
+        // calls but report finish_reason "stop", which would otherwise strand
+        // the calls in history unexecuted and silently end the turn.
+        if (owned_calls.len == 0) {
             try stdout_writer.writeAll("\n");
             return last_usage;
         }
