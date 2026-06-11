@@ -29,6 +29,9 @@ test {
     _ = @import("path_guard.zig");
     _ = @import("session.zig");
     _ = @import("tools/bash.zig");
+    _ = @import("tools/write.zig");
+    _ = @import("tools/edit.zig");
+    _ = @import("tools/read.zig");
 }
 
 const DEFAULT_BASE_URL = "https://ai-gateway.vercel.sh/v1";

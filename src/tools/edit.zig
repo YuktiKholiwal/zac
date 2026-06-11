@@ -293,3 +293,82 @@ fn suggestNearby(w: anytype, content: []const u8, needle: []const u8) !void {
         try w.print("  L{d}: {s}\n", .{ line_no, truncated });
     }
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+
+const testing = std.testing;
+
+/// Writes `initial` to a fresh temp file, runs edit() with `json_args` (which
+/// must reference the file's absolute path via {s}), and returns the tool's
+/// result plus the file's resulting contents. Caller frees both.
+const EditOutcome = struct { result: []u8, after: []u8 };
+
+fn runEdit(
+    alloc: std.mem.Allocator,
+    tmp: *std.testing.TmpDir,
+    initial: []const u8,
+    comptime json_template: []const u8,
+) !EditOutcome {
+    {
+        const f = try tmp.dir.createFile("f.txt", .{});
+        defer f.close();
+        try f.writeAll(initial);
+    }
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_abs = try tmp.dir.realpath(".", &buf);
+    const fpath = try std.fs.path.join(alloc, &.{ dir_abs, "f.txt" });
+    defer alloc.free(fpath);
+
+    const json = try std.fmt.allocPrint(alloc, json_template, .{fpath});
+    defer alloc.free(json);
+    var parsed = try std.json.parseFromSlice(std.json.Value, alloc, json, .{});
+    defer parsed.deinit();
+    const result = try execute(alloc, parsed.value);
+    const after = try tmp.dir.readFileAlloc(alloc, "f.txt", 1 << 20);
+    return .{ .result = result, .after = after };
+}
+
+test "edit: replaces a unique exact span" {
+    const alloc = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const out = try runEdit(alloc, &tmp, "alpha\nbeta\ngamma\n", "{{\"path\":\"{s}\",\"old_text\":\"beta\",\"new_text\":\"BETA\"}}");
+    defer alloc.free(out.result);
+    defer alloc.free(out.after);
+    try testing.expect(std.mem.indexOf(u8, out.result, "Edited") != null);
+    try testing.expectEqualStrings("alpha\nBETA\ngamma\n", out.after);
+}
+
+test "edit: ambiguous match without replace_all is refused and leaves file intact" {
+    const alloc = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const out = try runEdit(alloc, &tmp, "x\nx\n", "{{\"path\":\"{s}\",\"old_text\":\"x\",\"new_text\":\"y\"}}");
+    defer alloc.free(out.result);
+    defer alloc.free(out.after);
+    try testing.expect(std.mem.indexOf(u8, out.result, "matched 2 times") != null);
+    try testing.expectEqualStrings("x\nx\n", out.after); // unchanged
+}
+
+test "edit: replace_all substitutes every occurrence" {
+    const alloc = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const out = try runEdit(alloc, &tmp, "x\nx\n", "{{\"path\":\"{s}\",\"old_text\":\"x\",\"new_text\":\"y\",\"replace_all\":true}}");
+    defer alloc.free(out.result);
+    defer alloc.free(out.after);
+    try testing.expect(std.mem.indexOf(u8, out.result, "2 replacements") != null);
+    try testing.expectEqualStrings("y\ny\n", out.after);
+}
+
+test "edit: whitespace-tolerant fallback matches despite indentation drift" {
+    const alloc = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // File is tab-indented; old_text uses spaces and collapsed whitespace.
+    const out = try runEdit(alloc, &tmp, "fn main() {\n\treturn   0;\n}\n", "{{\"path\":\"{s}\",\"old_text\":\"return 0;\",\"new_text\":\"return 1;\"}}");
+    defer alloc.free(out.result);
+    defer alloc.free(out.after);
+    try testing.expect(std.mem.indexOf(u8, out.result, "whitespace-tolerant") != null);
+    try testing.expect(std.mem.indexOf(u8, out.after, "return 1;") != null);
+}
