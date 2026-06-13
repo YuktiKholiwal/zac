@@ -248,12 +248,14 @@ zac uses the `plan` tool to track steps and check them off as it goes.
 
 ## Tools
 
-The agent has eight. Read-only ones (`read`, `grep`, `find`, `ls`, `plan`) auto-allow. The three mutating ones prompt with `[y]es / [t]rust tool / [p]attern '...' / [N]o`.
+The agent has eight. Read-only ones (`read`, `grep`, `find`, `ls`, `plan`) auto-allow without a prompt. The three mutating ones prompt with `[y]es / [t]rust tool / [p]attern '...' / [N]o`.
+
+`read` auto-allows but is still confined to the working directory (it won't silently slurp `~/.ssh`, `.env` secrets, or `../../` paths) — pass `--allow-outside` to lift that, same flag as `write`/`edit`.
 
 <details>
 <summary><b><code>read</code></b> — fetch file contents</summary>
 
-Returns the file with 1-indexed line numbers. Pages with `offset`/`limit` on big files. **Diff-aware**: if the file was already read this session and has changed, only the diff is returned.
+Returns the file with 1-indexed line numbers. Pages with `offset`/`limit` on big files. **Diff-aware**: if the file was already read this session and has changed, only the diff is returned. Refuses paths outside the cwd unless `--allow-outside`.
 
 ```json
 { "path": "src/main.zig", "offset": 100, "limit": 50 }
@@ -290,11 +292,15 @@ Tries exact match first. If that fails, falls back to a **whitespace-tolerant** 
 <details>
 <summary><b><code>bash</code></b> — run a shell command</summary>
 
+Killed if it runs past `timeout` seconds (default 300), so a runaway command can't hang the agent.
+
 Wrapped in `sandbox-exec` on macOS by default (blocks writes to `/etc`, `/usr`, `/System`, `/Library`, `/private/etc`, `/bin`, `/sbin`, `/Applications`). Disable with `--no-sandbox`.
 
 ```json
 { "command": "zig build test --summary all", "timeout": 60 }
 ```
+
+> **Honest threat model:** the sandbox is a guardrail, not a jail. It only blocks writes to system paths on **macOS** — your `$HOME`, the network, and reads of anything still pass, and on **Linux there is no sandbox at all**. It stops an accidental `rm -rf /usr`; it is not a security boundary against a deliberately hostile model. Run untrusted prompts in a VM or container if that's your threat model.
 
 </details>
 
@@ -398,7 +404,7 @@ Pick at launch (`-m <name>`) or switch mid-session (`/mode <name>`). The mode sw
 | `-c, --continue` | Load previous session |
 | `-m, --mode <name>` | Start in a specific prompt mode |
 | `--yolo` | Auto-allow every tool call (skip permission prompts) |
-| `--allow-outside` | Permit `write`/`edit` to paths outside cwd |
+| `--allow-outside` | Permit `read`/`write`/`edit` to touch paths outside cwd |
 | `--no-sandbox` | Disable macOS `sandbox-exec` wrap around `bash` |
 | `--no-color` | Plain output (also auto-off when piped) |
 | `--no-auto-commit` | Skip per-turn git commits |
@@ -438,7 +444,7 @@ src/
 ├── env.zig           .env file loader
 ├── gitignore.zig     small .gitignore matcher for grep + find
 ├── cancel.zig        SIGINT handler for cancelling in-flight turns
-├── path_guard.zig    refuse writes outside cwd unless --allow-outside
+├── path_guard.zig    refuse reads/writes outside cwd unless --allow-outside
 ├── sandbox.zig       macOS sandbox-exec wrapper for `bash`
 ├── freshness.zig     mtime tracking + diff-aware re-read storage
 ├── pricing.zig       per-model rough cost estimation

@@ -125,6 +125,7 @@ pub fn Parser(comptime ReaderT: type) type {
             ) catch return; // ignore malformed chunks
 
             const root = self.parsed.?.value;
+            if (root != .object) return; // ignore non-object chunks (scalars, arrays)
 
             // Usage chunks come at the end with empty choices but a `usage` field.
             if (root.object.get("usage")) |u| {
@@ -148,6 +149,7 @@ pub fn Parser(comptime ReaderT: type) type {
             const choices = root.object.get("choices") orelse return;
             if (choices != .array or choices.array.items.len == 0) return;
             const choice = choices.array.items[0];
+            if (choice != .object) return;
 
             if (choice.object.get("delta")) |delta| {
                 if (delta == .object) {
