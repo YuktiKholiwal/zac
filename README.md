@@ -86,7 +86,7 @@ flowchart LR
 |---|---|
 | **Stale-context auto-refresh** | Tracks the mtime of every file the agent reads. Before each turn, files changed on disk are flagged so the model re-reads them. No more "the agent edited a version of the file that's already obsolete." |
 | **Diff-aware re-reads** | When the agent re-reads a file already in context, only the diff since last read is returned. Saves a lot of tokens on big files. |
-| **Cost projection** | Each prompt shows an estimated input cost *before* you hit enter, based on conversation size and the model's pricing. No surprise $5 turns. |
+| **Cost projection** | Each prompt shows an estimated input cost *before* you hit enter, based on conversation size and the model's pricing. The bytes-per-token ratio self-calibrates from each turn's real usage, so the estimate sharpens as you go. No surprise $5 turns. |
 | **Snapshots** | `/snapshot <name>` checkpoints both the conversation AND every file the agent touched. `/restore <name>` rolls back both. Conversational undo. |
 | **Per-turn git commits** | When zac touches files in a git repo, each turn becomes a real commit. `/undo` does a soft reset. Real version control over the agent. |
 
@@ -447,7 +447,7 @@ src/
 ├── path_guard.zig    refuse reads/writes outside cwd unless --allow-outside
 ├── sandbox.zig       macOS sandbox-exec wrapper for `bash`
 ├── freshness.zig     mtime tracking + diff-aware re-read storage
-├── pricing.zig       per-model rough cost estimation
+├── pricing.zig       per-model cost estimation, self-calibrating bytes/token
 ├── snapshot.zig      conversation + tracked-files checkpoints
 ├── autogit.zig       per-turn git commits + /undo
 ├── prompt.zig        11 embedded prompt modes (via @embedFile)

@@ -33,6 +33,7 @@ test {
     _ = @import("tools/edit.zig");
     _ = @import("tools/read.zig");
     _ = @import("agent.zig");
+    _ = @import("pricing.zig");
 }
 
 const DEFAULT_BASE_URL = "https://ai-gateway.vercel.sh/v1";
@@ -111,6 +112,9 @@ pub fn main() !void {
     var total_prompt_tokens: u64 = 0;
     var total_completion_tokens: u64 = 0;
     var turn_count: u64 = 0;
+    // Refined from each turn's real (bytes, prompt_tokens) so the cost hint
+    // sharpens past the initial ~4-bytes/token guess.
+    var bytes_per_token: f32 = pricing.DEFAULT_BYTES_PER_TOKEN;
 
     const project_context = context.load(alloc) catch null;
     defer if (project_context) |c| alloc.free(c);
@@ -153,7 +157,7 @@ pub fn main() !void {
     defer input_buf.deinit();
 
     while (true) {
-        try showCostHint(stdout, cfg.model, msgs.items);
+        try showCostHint(stdout, cfg.model, msgs.items, bytes_per_token);
         const input = readUserInput(stdin, stdout, &line_buf, &input_buf) catch |err| switch (err) {
             error.EndOfStream => {
                 try stdout.writeAll("\n");
@@ -209,6 +213,13 @@ pub fn main() !void {
         total_prompt_tokens += turn_usage.prompt_tokens;
         total_completion_tokens += turn_usage.completion_tokens;
         turn_count += 1;
+
+        // Calibrate the bytes/token ratio from this turn's real usage: the
+        // final gateway call's prompt_tokens corresponds to the full message
+        // array now in `msgs`.
+        var sent_bytes: usize = 0;
+        for (msgs.items) |m| sent_bytes += m.content.len;
+        if (pricing.calibrate(sent_bytes, turn_usage.prompt_tokens)) |r| bytes_per_token = r;
         session.save(alloc, msgs.items) catch {};
 
         if (!args.no_auto_commit) {
@@ -238,10 +249,10 @@ pub fn main() !void {
     }
 }
 
-fn showCostHint(stdout: anytype, model: []const u8, msgs: []const messages.Message) !void {
+fn showCostHint(stdout: anytype, model: []const u8, msgs: []const messages.Message, bytes_per_token: f32) !void {
     var total: usize = 0;
     for (msgs) |m| total += m.content.len;
-    const cost = pricing.projectInputCost(model, total);
+    const cost = pricing.projectInputCost(model, total, bytes_per_token);
     if (cost < 0) return; // unknown model; quiet
     if (cost < 0.001) return; // too small to matter
     try stdout.print("{s}~${d:.3} est{s}\n", .{ ui.DIM, cost, ui.RESET });
