@@ -1,6 +1,12 @@
 const std = @import("std");
 const messages = @import("messages.zig");
 
+/// Idle-read timeout for the streaming response. If no bytes arrive for this
+/// long, the socket read errors out instead of hanging the agent forever. It's
+/// an *idle* timeout (resets on each chunk), not a total cap, so a slow model
+/// that keeps streaming is never cut off — only a dead/stalled connection is.
+const IDLE_READ_TIMEOUT_S: i64 = 180;
+
 pub const Config = struct {
     /// e.g. "https://ai-gateway.vercel.sh/v1"
     base_url: []u8,
@@ -89,6 +95,8 @@ fn chatOnce(
     });
     errdefer req.deinit();
 
+    setReadTimeout(&req, IDLE_READ_TIMEOUT_S);
+
     req.transfer_encoding = .{ .content_length = body.len };
     try req.send();
     try req.writeAll(body);
@@ -107,6 +115,21 @@ fn chatOnce(
 
     if (status >= 500 and status < 600) return .{ .retryable = status };
     return .{ .fatal = {} };
+}
+
+/// Bound blocking reads on the request's socket so a stalled stream can't hang
+/// the agent indefinitely. Best-effort: if the platform rejects the option we
+/// simply proceed without a timeout. Works for HTTPS too — the timeout fires on
+/// the underlying recv and propagates up through the TLS layer as a read error.
+fn setReadTimeout(req: *std.http.Client.Request, secs: i64) void {
+    const conn = req.connection orelse return;
+    const tv = std.posix.timeval{ .sec = @intCast(secs), .usec = 0 };
+    std.posix.setsockopt(
+        conn.stream.handle,
+        std.posix.SOL.SOCKET,
+        std.posix.SO.RCVTIMEO,
+        std.mem.asBytes(&tv),
+    ) catch {};
 }
 
 pub fn buildRequestBody(

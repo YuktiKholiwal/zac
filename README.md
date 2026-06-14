@@ -433,7 +433,7 @@ Drop your project conventions in any of them and zac picks them up automatically
 src/
 ├── main.zig          REPL, argv parsing, slash commands, session lifecycle
 ├── agent.zig         multi-turn streaming loop, tool-call accumulation
-├── gateway.zig       HTTPS request builder, 1× retry on 5xx
+├── gateway.zig       HTTPS request builder, 1× retry on 5xx, 180s idle-read timeout
 ├── sse.zig           Server-Sent Events parser → typed events
 ├── messages.zig      OpenAI chat-completions JSON shapes
 ├── ui.zig            inline ANSI renderer (markdown, tool icons, hyperlinks)
