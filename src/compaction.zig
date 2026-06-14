@@ -17,10 +17,8 @@ pub fn maybeCompact(
     stderr_writer: anytype,
     force: bool,
 ) !bool {
-    if (!force and last_prompt_tokens < THRESHOLD_TOKENS) return false;
-    // Need enough history to be worth compacting.
-    if (msgs.items.len < 6) {
-        if (force) try stderr_writer.writeAll("[compact: nothing to compact yet]\n");
+    if (!shouldCompact(force, last_prompt_tokens, msgs.items.len)) {
+        if (force and msgs.items.len < 6) try stderr_writer.writeAll("[compact: nothing to compact yet]\n");
         return false;
     }
 
@@ -39,10 +37,41 @@ pub fn maybeCompact(
         try stderr_writer.print("[compaction failed: {s}]\n", .{@errorName(err)});
         return false;
     };
-    // `summary` is owned by `alloc`. We'll move it into a Message.
 
-    // Free old messages in [history_start, cut).
-    var i: usize = history_start;
+    // Build the prefixed summary content; ownership moves into spliceSummary.
+    const summary_msg_content = try std.fmt.allocPrint(
+        alloc,
+        "[Compacted history summary]\n{s}",
+        .{summary},
+    );
+    alloc.free(summary);
+
+    const removed = cut - history_start;
+    try spliceSummary(alloc, msgs, history_start, cut, summary_msg_content);
+
+    try stderr_writer.print("[compacted {d} messages into 1 summary]\n", .{removed});
+    return true;
+}
+
+/// Whether maybeCompact should proceed, factored out so the policy is testable
+/// without the network round-trip.
+fn shouldCompact(force: bool, last_prompt_tokens: u64, msg_count: usize) bool {
+    if (!force and last_prompt_tokens < THRESHOLD_TOKENS) return false;
+    if (msg_count < 6) return false;
+    return true;
+}
+
+/// Replace msgs[start..cut) with a single system message owning `content`,
+/// freeing the messages it displaces. This is the index math compaction hinges
+/// on, isolated from the network so it can be tested directly.
+fn spliceSummary(
+    alloc: std.mem.Allocator,
+    msgs: *std.ArrayList(messages.Message),
+    start: usize,
+    cut: usize,
+    content: []u8,
+) !void {
+    var i: usize = start;
     while (i < cut) : (i += 1) {
         const m = msgs.items[i];
         alloc.free(m.content);
@@ -55,36 +84,20 @@ pub fn maybeCompact(
         if (m.tool_calls.len > 0) alloc.free(m.tool_calls);
     }
 
-    // Build the prefixed summary content.
-    const summary_msg_content = try std.fmt.allocPrint(
-        alloc,
-        "[Compacted history summary]\n{s}",
-        .{summary},
-    );
-    alloc.free(summary);
-
-    // Shift the tail down so we can insert one summary message in place of
-    // the removed range.
-    const removed = cut - history_start;
+    const removed = cut - start;
     const new_len = msgs.items.len - removed + 1;
     if (removed > 1) {
-        var j: usize = history_start + 1;
+        var j: usize = start + 1;
         while (j < new_len) : (j += 1) {
             msgs.items[j] = msgs.items[j + removed - 1];
         }
         msgs.shrinkRetainingCapacity(new_len);
     } else if (removed == 0) {
-        try msgs.insert(history_start, undefined);
+        try msgs.insert(start, undefined);
     }
-    // removed == 1: shape already correct; we overwrite below.
+    // removed == 1: shape already correct; overwrite below.
 
-    msgs.items[history_start] = .{
-        .role = .system,
-        .content = summary_msg_content,
-    };
-
-    try stderr_writer.print("[compacted {d} messages into 1 summary]\n", .{removed});
-    return true;
+    msgs.items[start] = .{ .role = .system, .content = content };
 }
 
 fn summarize(
@@ -138,4 +151,43 @@ fn summarize(
     };
 
     return out.toOwnedSlice();
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Tests
+
+const testing = std.testing;
+
+test "compaction: shouldCompact respects threshold, force, and min length" {
+    try testing.expect(!shouldCompact(false, THRESHOLD_TOKENS - 1, 10)); // under threshold
+    try testing.expect(shouldCompact(false, THRESHOLD_TOKENS, 10)); // at threshold
+    try testing.expect(shouldCompact(true, 0, 6)); // forced
+    try testing.expect(!shouldCompact(true, 0, 5)); // too short even when forced
+    try testing.expect(!shouldCompact(false, THRESHOLD_TOKENS, 5)); // too short
+}
+
+test "compaction: spliceSummary replaces a range with one system message" {
+    const alloc = testing.allocator;
+    var msgs = std.ArrayList(messages.Message).init(alloc);
+    defer {
+        for (msgs.items) |m| alloc.free(m.content);
+        msgs.deinit();
+    }
+    // [system, m1, m2, m3, m4, m5] — content owned by alloc so splice can free.
+    const labels = [_][]const u8{ "system", "m1", "m2", "m3", "m4", "m5" };
+    const roles = [_]messages.Role{ .system, .user, .assistant, .user, .assistant, .user };
+    for (labels, roles) |label, role| {
+        try msgs.append(.{ .role = role, .content = try alloc.dupe(u8, label) });
+    }
+
+    const summary = try alloc.dupe(u8, "SUMMARY");
+    // Replace [1,4): m1, m2, m3 → one summary message.
+    try spliceSummary(alloc, &msgs, 1, 4, summary);
+
+    try testing.expectEqual(@as(usize, 4), msgs.items.len); // system, SUMMARY, m4, m5
+    try testing.expectEqualStrings("system", msgs.items[0].content);
+    try testing.expectEqual(messages.Role.system, msgs.items[1].role);
+    try testing.expectEqualStrings("SUMMARY", msgs.items[1].content);
+    try testing.expectEqualStrings("m4", msgs.items[2].content);
+    try testing.expectEqualStrings("m5", msgs.items[3].content);
 }

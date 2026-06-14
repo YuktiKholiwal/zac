@@ -1,11 +1,16 @@
 const std = @import("std");
 
-/// Is the current working directory inside a git working tree?
-pub fn isGitRepo(alloc: std.mem.Allocator) bool {
+/// All functions take an optional `cwd`: null means the process's current
+/// directory (the normal case from main), and a path lets tests drive a
+/// throwaway repo without chdir'ing the whole process.
+
+/// Is `cwd` inside a git working tree?
+pub fn isGitRepo(alloc: std.mem.Allocator, cwd: ?[]const u8) bool {
     var child = std.process.Child.init(
         &.{ "git", "rev-parse", "--is-inside-work-tree" },
         alloc,
     );
+    child.cwd = cwd;
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
@@ -18,11 +23,12 @@ pub fn isGitRepo(alloc: std.mem.Allocator) bool {
 }
 
 /// True if there's anything staged or unstaged.
-pub fn hasChanges(alloc: std.mem.Allocator) bool {
+pub fn hasChanges(alloc: std.mem.Allocator, cwd: ?[]const u8) bool {
     var child = std.process.Child.init(
         &.{ "git", "status", "--porcelain" },
         alloc,
     );
+    child.cwd = cwd;
     child.stdin_behavior = .Ignore;
     // collectOutput requires both pipes. Capture stderr too even if we don't
     // look at it — leaving it as .Ignore makes the polling loop wait forever.
@@ -42,12 +48,13 @@ pub fn hasChanges(alloc: std.mem.Allocator) bool {
 /// Stage all changes and commit with the provided message. Returns the
 /// short commit SHA on success, or null if there was nothing to commit or
 /// the commit failed.
-pub fn commitAll(alloc: std.mem.Allocator, message: []const u8) !?[]u8 {
-    if (!isGitRepo(alloc)) return null;
-    if (!hasChanges(alloc)) return null;
+pub fn commitAll(alloc: std.mem.Allocator, cwd: ?[]const u8, message: []const u8) !?[]u8 {
+    if (!isGitRepo(alloc, cwd)) return null;
+    if (!hasChanges(alloc, cwd)) return null;
 
     {
         var add = std.process.Child.init(&.{ "git", "add", "-A" }, alloc);
+        add.cwd = cwd;
         add.stdin_behavior = .Ignore;
         add.stdout_behavior = .Ignore;
         add.stderr_behavior = .Ignore;
@@ -60,6 +67,7 @@ pub fn commitAll(alloc: std.mem.Allocator, message: []const u8) !?[]u8 {
             &.{ "git", "commit", "--no-verify", "-m", message },
             alloc,
         );
+        commit.cwd = cwd;
         commit.stdin_behavior = .Ignore;
         commit.stdout_behavior = .Ignore;
         commit.stderr_behavior = .Ignore;
@@ -71,14 +79,15 @@ pub fn commitAll(alloc: std.mem.Allocator, message: []const u8) !?[]u8 {
         }
     }
 
-    return try shortSha(alloc);
+    return try shortSha(alloc, cwd);
 }
 
-fn shortSha(alloc: std.mem.Allocator) ![]u8 {
+fn shortSha(alloc: std.mem.Allocator, cwd: ?[]const u8) ![]u8 {
     var child = std.process.Child.init(
         &.{ "git", "rev-parse", "--short", "HEAD" },
         alloc,
     );
+    child.cwd = cwd;
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -96,12 +105,13 @@ fn shortSha(alloc: std.mem.Allocator) ![]u8 {
 
 /// `git reset --soft HEAD~1` to undo the last auto-commit, preserving the
 /// working tree changes.
-pub fn undoLast(alloc: std.mem.Allocator) !bool {
-    if (!isGitRepo(alloc)) return false;
+pub fn undoLast(alloc: std.mem.Allocator, cwd: ?[]const u8) !bool {
+    if (!isGitRepo(alloc, cwd)) return false;
     var child = std.process.Child.init(
         &.{ "git", "reset", "--soft", "HEAD~1" },
         alloc,
     );
+    child.cwd = cwd;
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
@@ -111,4 +121,62 @@ pub fn undoLast(alloc: std.mem.Allocator) !bool {
         .Exited => |c| c == 0,
         else => false,
     };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Tests
+
+/// Run a git command in `dir` for test setup, ignoring output. Asserts success.
+fn git(alloc: std.mem.Allocator, dir: []const u8, argv: []const []const u8) !void {
+    var child = std.process.Child.init(argv, alloc);
+    child.cwd = dir;
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    try child.spawn();
+    _ = try child.wait();
+}
+
+test "autogit: commit then undo round-trips in a throwaway repo" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir = try tmp.dir.realpath(".", &buf);
+
+    try git(alloc, dir, &.{ "git", "init", "-q" });
+    try git(alloc, dir, &.{ "git", "config", "user.email", "t@t.test" });
+    try git(alloc, dir, &.{ "git", "config", "user.name", "t" });
+    try git(alloc, dir, &.{ "git", "config", "commit.gpgsign", "false" });
+
+    try std.testing.expect(isGitRepo(alloc, dir));
+
+    // Nothing to commit yet.
+    try std.testing.expect((try commitAll(alloc, dir, "empty")) == null);
+
+    // First change → commits, returns a short sha.
+    {
+        const f = try tmp.dir.createFile("a.txt", .{});
+        defer f.close();
+        try f.writeAll("one");
+    }
+    const sha1 = (try commitAll(alloc, dir, "add a.txt")) orelse return error.ExpectedCommit;
+    defer alloc.free(sha1);
+    try std.testing.expect(sha1.len >= 4 and sha1.len <= 12);
+    try std.testing.expect(!hasChanges(alloc, dir)); // clean after commit
+
+    // Second change → second commit.
+    {
+        const f = try tmp.dir.createFile("a.txt", .{});
+        defer f.close();
+        try f.writeAll("two");
+    }
+    const sha2 = (try commitAll(alloc, dir, "edit a.txt")) orelse return error.ExpectedCommit;
+    defer alloc.free(sha2);
+    try std.testing.expect(!std.mem.eql(u8, sha1, sha2));
+
+    // Undo the second commit; soft reset preserves the working-tree change,
+    // so the repo is dirty again.
+    try std.testing.expect(try undoLast(alloc, dir));
+    try std.testing.expect(hasChanges(alloc, dir));
 }

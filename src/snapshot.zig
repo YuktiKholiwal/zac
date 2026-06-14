@@ -222,3 +222,90 @@ fn copyTree(alloc: std.mem.Allocator, src_root: []const u8, dst_root: []const u8
     }
     return copied;
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Tests
+
+const testing = std.testing;
+
+fn freeRestored(alloc: std.mem.Allocator, msgs: *std.ArrayList(messages.Message)) void {
+    for (msgs.items) |m| {
+        alloc.free(m.content);
+        if (m.tool_call_id) |id| alloc.free(id);
+        for (m.tool_calls) |c| {
+            alloc.free(c.id);
+            alloc.free(c.name);
+            alloc.free(c.arguments);
+        }
+        if (m.tool_calls.len > 0) alloc.free(m.tool_calls);
+    }
+    msgs.deinit();
+}
+
+test "snapshot: validName accepts safe names and rejects the rest" {
+    try testing.expect(validName("my-snap_1.0"));
+    try testing.expect(!validName(""));
+    try testing.expect(!validName(".hidden"));
+    try testing.expect(!validName("has space"));
+    try testing.expect(!validName("slash/name"));
+}
+
+test "snapshot: parseMessages round-trips the saved conversation shape" {
+    const alloc = testing.allocator;
+    const calls = [_]messages.ToolCall{
+        .{ .id = "call_1", .name = "read", .arguments = "{\"path\":\"a\"}" },
+    };
+    const original = [_]messages.Message{
+        .{ .role = .system, .content = "sys" },
+        .{ .role = .assistant, .content = "doing it", .tool_calls = &calls },
+        .{ .role = .tool, .content = "result", .tool_call_id = "call_1" },
+        .{ .role = .user, .content = "thanks" },
+    };
+
+    // Serialize exactly as save() does, then parse back.
+    var buf = std.ArrayList(u8).init(alloc);
+    defer buf.deinit();
+    var jws = std.json.writeStream(buf.writer(), .{});
+    try jws.beginArray();
+    for (original) |m| try jws.write(m);
+    try jws.endArray();
+
+    var restored = try parseMessages(alloc, buf.items);
+    defer freeRestored(alloc, &restored);
+
+    try testing.expectEqual(@as(usize, 4), restored.items.len);
+    try testing.expectEqual(messages.Role.assistant, restored.items[1].role);
+    try testing.expectEqual(@as(usize, 1), restored.items[1].tool_calls.len);
+    try testing.expectEqualStrings("read", restored.items[1].tool_calls[0].name);
+    try testing.expectEqualStrings("{\"path\":\"a\"}", restored.items[1].tool_calls[0].arguments);
+    try testing.expectEqual(messages.Role.tool, restored.items[2].role);
+    try testing.expectEqualStrings("call_1", restored.items[2].tool_call_id.?);
+    try testing.expectEqualStrings("thanks", restored.items[3].content);
+}
+
+test "snapshot: copyTree copies a nested tree between directories" {
+    const alloc = testing.allocator;
+    var src = testing.tmpDir(.{});
+    defer src.cleanup();
+    var dst = testing.tmpDir(.{});
+    defer dst.cleanup();
+
+    try src.dir.makePath("sub");
+    {
+        const f = try src.dir.createFile("sub/x.txt", .{});
+        defer f.close();
+        try f.writeAll("payload");
+    }
+
+    var sbuf: [std.fs.max_path_bytes]u8 = undefined;
+    var dbuf: [std.fs.max_path_bytes]u8 = undefined;
+    const src_abs = try src.dir.realpath(".", &sbuf);
+    const dst_abs = try dst.dir.realpath(".", &dbuf);
+
+    const n = try copyTree(alloc, src_abs, dst_abs);
+    try testing.expectEqual(@as(usize, 1), n);
+
+    const got = try dst.dir.readFileAlloc(alloc, "sub/x.txt", 1024);
+    defer alloc.free(got);
+    try testing.expectEqualStrings("payload", got);
+}

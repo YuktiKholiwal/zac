@@ -17,7 +17,7 @@
 zac talks to the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) directly — one HTTPS endpoint, one streaming protocol, no SDK between you and the model. It runs **inline** (no alt-screen takeover), pipes cleanly, gets out of your way.
 
 ```
-~3,800 LoC of Zig                · 28 unit tests passing
+~3,800 LoC of Zig                · 50 unit tests passing
 8 tools · 11 prompt modes        · 6 MB debug / ~1–2 MB release
 0 runtime dependencies           · single static binary
 ```
@@ -533,7 +533,7 @@ flowchart TD
 ```bash
 zig build                              # debug build
 zig build -Doptimize=ReleaseSmall      # ~1–2 MB release
-zig build test --summary all           # 28 unit tests
+zig build test --summary all           # 50 unit tests
 zig build run -- --help                # build + run with args
 ```
 

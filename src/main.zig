@@ -34,6 +34,9 @@ test {
     _ = @import("tools/read.zig");
     _ = @import("agent.zig");
     _ = @import("pricing.zig");
+    _ = @import("snapshot.zig");
+    _ = @import("autogit.zig");
+    _ = @import("compaction.zig");
 }
 
 const DEFAULT_BASE_URL = "https://ai-gateway.vercel.sh/v1";
@@ -226,7 +229,7 @@ pub fn main() !void {
             const summary_text = if (input.len > 60) input[0..60] else input;
             var msg_buf: [128]u8 = undefined;
             const commit_msg = std.fmt.bufPrint(&msg_buf, "zac: {s}", .{summary_text}) catch "zac: turn";
-            if (autogit.commitAll(alloc, commit_msg)) |sha_opt| {
+            if (autogit.commitAll(alloc, null, commit_msg)) |sha_opt| {
                 if (sha_opt) |sha| {
                     try stderr.print("{s}[auto-commit {s}]{s}\n", .{ ui.DIM, sha, ui.RESET });
                     alloc.free(sha);
@@ -507,7 +510,7 @@ fn handleSlash(
     }
 
     if (std.mem.eql(u8, input, "/undo")) {
-        const ok = autogit.undoLast(alloc) catch false;
+        const ok = autogit.undoLast(alloc, null) catch false;
         if (ok) {
             try stdout.writeAll("[undid last auto-commit; working tree preserved]\n");
         } else {
